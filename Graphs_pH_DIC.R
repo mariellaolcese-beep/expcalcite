@@ -71,26 +71,29 @@ p_dic <- ggplot(dic_summary, aes(x=SITE, y=mean_DIC, fill=TREATMENT)) +
   theme_minimal(base_size=13) +
   theme(plot.title=element_text(face="bold", size=12))
 
+
+# ===# =========================================================
+# 3. CaCO3 y OM (Con filtro temporal para el dato raro de OM) ESTE FILTRO DEBO SACARLO LUEGO!!!!
 # =========================================================
-# 3. CaCO3 y OM (desde el archivo ya procesado) ESTA PARTE ESTA HORRENDA 
-# =========================================================
-SED <- read.csv("sedimento_clean.csv", stringsAsFactors = FALSE)
+sed <- read.csv("sedimento_clean.csv", stringsAsFactors = FALSE) %>%
+  filter(!is.na(pct_OM) & pct_OM > 0) %>% 
+  filter(pct_OM < 15) # <-- FILTRO TEMPORAL: Ajusta este número según tu dato raro
 
 p_caco3 <- ggplot(sed, aes(x=site, y=pct_CaCO3_corrected, fill=site)) +
   geom_boxplot(width=0.5, alpha=0.7) +
   geom_jitter(width=0.08, alpha=0.5) +
-  stat_compare_means(method="t.test", label="p.format") +
+  stat_compare_means(method="wilcox.test", label="p.format") +
   labs(x="Site", y="%CaCO3", title="CaCO3 content") +
   theme_minimal(base_size=13) + theme(legend.position="none")
 
 p_om <- ggplot(sed, aes(x=site, y=pct_OM, fill=site)) +
   geom_boxplot(width=0.5, alpha=0.7) +
   geom_jitter(width=0.08, alpha=0.5) +
-  stat_compare_means(method="t.test", label="p.format") +
+  stat_compare_means(method="wilcox.test", label="p.format") +
   labs(x="Site", y="%OM", title="Organic matter content") +
   theme_minimal(base_size=13) + theme(legend.position="none")
 
-# =========================================================
+
 # Combinar y exportar
 # =========================================================
 final_plot <- (p_ph) 
@@ -108,3 +111,4 @@ ggsave("poster_panels_caco3.png", final_plot, width=12, height=9, dpi=300)
 
 final_plot <- (p_om) 
 ggsave("poster_panels_om.png", final_plot, width=12, height=9, dpi=300)
+
