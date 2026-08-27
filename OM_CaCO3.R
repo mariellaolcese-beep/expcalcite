@@ -172,3 +172,55 @@ g_tiempo_OM <- ggplot(sed_multi, aes(x = time, y = pct_OM, fill = treatment)) +
   )
 
 ggsave("grafico_tiempo_OM.png", plot = g_tiempo_OM, width = 8, height = 4, dpi = 300)
+sed_clean %>% 
+  group_by(site) %>% 
+  summarise(
+    Media_OM = mean(pct_OM, na.rm = TRUE),
+    Mediana_OM = median(pct_OM, na.rm = TRUE),
+    SD_OM = sd(pct_OM, na.rm = TRUE)
+  )
+
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+
+# 1. Definir paleta de colores
+col_A <- "#D95F02"  # Sitio A (Low OM)
+col_B <- "#7570B3"  # Sitio B (High OM)
+
+# 2. Modificar las etiquetas del factor site en el dataframe
+sed_plot <- sed_clean %>%
+  mutate(site_labeled = factor(site, 
+                               levels = c("A", "B"),
+                               labels = c("site low OM (A)", "site high OM (B)")))
+
+# 3. Generar el gráfico centrado
+p_om_site <- ggplot(sed_plot, aes(x = site_labeled, y = pct_OM, fill = site_labeled)) +
+  geom_boxplot(width = 0.4, alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.1, size = 2, alpha = 0.6, aes(color = site_labeled)) +
+  scale_fill_manual(values = c("site low OM (A)" = col_A, "site high OM (B)" = col_B)) +
+  scale_color_manual(values = c("site low OM (A)" = col_A, "site high OM (B)" = col_B)) +
+  stat_compare_means(method = "wilcox.test", label = "p.signif", 
+                     label.y = max(sed_plot$pct_OM, na.rm = TRUE) + 0.5, 
+                     size = 6, symnum.args = list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), 
+                                                  symbols = c("***", "**", "*", "ns"))) +
+  labs(
+    title = "% Organic matter",
+    subtitle = "Wilcox test (p < 0.001)",
+    x = "Site",
+    y = "Organic matter (%OM)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),    # Centra el título
+    plot.subtitle = element_text(size = 10, color = "gray30", hjust = 0.5), # Centra el subtítulo
+    panel.grid.minor = element_blank()
+  )
+
+# 4. Guardar gráfico
+ggsave("OM_sitio_comparacion.png", p_om_site, width = 6, height = 5, dpi = 300)
