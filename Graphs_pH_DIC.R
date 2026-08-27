@@ -11,12 +11,17 @@ library(ggpubr)
 col_D <- "#B08968"
 col_W <- "#4A7C82"
 
-# =========================================================
-# 1. pH -- Delta I->F, para OL Y PW (por eso antes faltaba PW)
-# =========================================================
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Paleta consistente
+col_D <- "#B08968"  # Dry
+col_W <- "#4A7C82"  # Wet
+
+# 1. Cargar y procesar datos
 ph_raw <- read.csv("ph_data.csv", sep=",", dec=".", fileEncoding="UTF-8-BOM", stringsAsFactors = FALSE)
 
-# Ajusta estos nombres si en tu csv se llaman distinto:
 names(ph_raw)[names(ph_raw) == "site..A.B."] <- "site"
 names(ph_raw)[names(ph_raw) == "treatment..D.W."] <- "treatment"
 names(ph_raw)[names(ph_raw) == "tiempo..t0.etc."] <- "time"
@@ -29,25 +34,54 @@ ph_long <- ph_raw %>%
 
 ph_delta <- ph_long %>%
   group_by(site, treatment, time, layer, Replicate) %>%
-  summarise(pH_I = pH[sacrificio == "I"][1],
-            pH_F = pH[sacrificio == "F"][1],
-            .groups = "drop") %>%
+  summarise(
+    pH_I = pH[sacrificio == "I"][1],
+    pH_F = pH[sacrificio == "F"][1],
+    .groups = "drop"
+  ) %>%
   mutate(delta_pH = pH_F - pH_I) %>%
   group_by(site, treatment, time, layer) %>%
-  summarise(mean_delta = mean(delta_pH, na.rm=TRUE),
-            sd_delta = sd(delta_pH, na.rm=TRUE), .groups="drop") %>%
-  filter(time == "t0")   # cambia o quita este filtro si quieres t1 tambien
+  summarise(
+    mean_delta = mean(delta_pH, na.rm=TRUE),
+    sd_delta = sd(delta_pH, na.rm=TRUE), 
+    .groups = "drop"
+  ) %>%
+  filter(time == "t0") %>%
+  mutate(
+    site = factor(site, levels = c("A", "B"), labels = c("site low OM", "site high OM"))
+  )
 
-p_ph <- ggplot(ph_delta, aes(x=site, y=mean_delta, fill=treatment)) +
-  geom_col(position=position_dodge(width=0.7), width=0.6) +
-  geom_errorbar(aes(ymin=mean_delta-sd_delta, ymax=mean_delta+sd_delta),
-                position=position_dodge(width=0.7), width=0.15) +
+# 2. Gráfico con formato homogéneo
+p_ph <- ggplot(ph_delta, aes(x = site, y = mean_delta, fill = treatment)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_errorbar(
+    aes(ymin = mean_delta - sd_delta, ymax = mean_delta + sd_delta),
+    position = position_dodge(width = 0.7), width = 0.2, linewidth = 0.6
+  ) +
   facet_wrap(~layer) +
-  scale_fill_manual(values=c(D=col_D, W=col_W), name="Treatment") +
-  geom_hline(yintercept=0, linewidth=0.4) +
-  labs(x="Site", y=expression(Delta*"pH (Final - Initial)"), title="pH change during 24h incubation (t0)") +
-  theme_minimal(base_size=13) +
-  theme(plot.title=element_text(face="bold", size=12))
+  scale_fill_manual(values = c(D = col_D, W = col_W), name = "Treatment") +
+  geom_hline(yintercept = 0, linewidth = 0.5, color = "black") +
+  labs(
+    x = "Site", 
+    y = expression(Delta*"pH (Final - Initial)"), 
+    title = "pH change during 24h incubation (t0)"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5), # Título centrado idéntico
+    axis.title = element_text(face = "bold", size = 16),
+    axis.text = element_text(size = 13, color = "black"),
+    strip.text = element_text(face = "bold", size = 15),
+    legend.title = element_text(face = "bold", size = 15),
+    legend.text = element_text(size = 14),
+    legend.position = "top",                                          # Leyenda arriba
+    panel.grid.minor = element_blank()
+  )
+
+# 3. Guardar la imagen
+ggsave("poster_panels_ph.png", p_ph, width = 11, height = 8, dpi = 300)
+
+cat("\nListo. Imagen guardada como poster_panels_ph.png\n")
 
 # =========================================================
 # 2. DIC
