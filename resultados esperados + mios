@@ -1,0 +1,94 @@
+resultados esperados intentando poner los mios encima
+library(ggplot2)
+library(dplyr)
+
+# Paleta consistente
+col_D <- "#B08968"  # Dry
+col_W <- "#4A7C82"  # Wet
+
+# 1. Cargar tus datos reales de DIC
+dic <- read.csv("DIC.csv", sep = ",", dec = ".", fileEncoding = "UTF-8-BOM")
+names(dic) <- c("SAMPLE", "TIME", "LAYER", "SITE", "TREATMENT", "DIC")
+
+tiempos_unicos_dic <- sort(unique(dic$TIME))[1:2]
+
+# Resumen de tus datos reales (T0 y T1)
+real_data <- dic %>%
+  filter(TIME %in% tiempos_unicos_dic) %>%
+  group_by(TIME, SITE, TREATMENT) %>%
+  summarise(
+    mean_DIC = mean(DIC, na.rm = TRUE),
+    sd_DIC = sd(DIC, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Day = ifelse(TIME == tiempos_unicos_dic[1], 0, 14),
+    Site = factor(SITE, levels = c("A", "B"), labels = c("site low OM", "site high OM")),
+    Treatment = factor(TREATMENT, levels = c("D", "W"))
+  )
+
+# 2. Generar las curvas teóricas de expectativas (hasta el día 120 / T4)
+tiempo_continuo <- seq(0, 120, length.out = 200)
+
+expected_lines <- expand.grid(
+  Day = tiempo_continuo,
+  Site = c("site low OM", "site high OM"),
+  Treatment = c("D", "W")
+) %>%
+  mutate(
+    K = ifelse(Site == "site high OM", 3.5, 2.2),
+    Expected_DIC = case_when(
+      Treatment == "W" ~ 1.5 + (K - 1.5) * (1 - exp(-0.035 * Day)),
+      Treatment == "D" ~ 1.5 + (K * 0.6 - 1.5) * (1 - exp(-0.018 * Day))
+    ),
+    Site = factor(Site, levels = c("site low OM", "site high OM")),
+    Treatment = factor(Treatment, levels = c("D", "W"))
+  )
+
+# 3. Gráfico: Curvas teóricas esperadas + Datos reales medidos (T0 y T1)
+p_expected_real <- ggplot() +
+  # Curva de expectativas (Líneas discontinuas)
+  geom_line(data = expected_lines, aes(x = Day, y = Expected_DIC, color = Treatment, linetype = Treatment), linewidth = 1) +
+  
+  # Sombreado de la ventana de datos actuales (0 a 14 días)
+  annotate("rect", xmin = -2, xmax = 18, ymin = -Inf, ymax = Inf, alpha = 0.1, fill = "gray50") +
+  
+  # Puntos con barras de error de tus DATOS REALES (T0 y T1)
+  geom_errorbar(data = real_data, aes(x = Day, ymin = mean_DIC - sd_DIC, ymax = mean_DIC + sd_DIC, color = Treatment), 
+                width = 3, linewidth = 0.7) +
+  geom_point(data = real_data, aes(x = Day, y = mean_DIC, fill = Treatment), 
+             shape = 21, size = 4, color = "black", stroke = 1) +
+  
+  # Etiquetas explicativas
+  annotate("text", x = 8, y = 3.8, label = "Observed Data\n(T0 & T1)", size = 3.8, fontface = "bold") +
+  annotate("text", x = 70, y = 3.8, label = "Expected Kinetics (T2 - T4)", size = 3.8, fontface = "italic", color = "gray30") +
+  
+  facet_wrap(~Site) +
+  scale_color_manual(values = c(D = col_D, W = col_W), name = "Treatment") +
+  scale_fill_manual(values = c(D = col_D, W = col_W), name = "Treatment") +
+  scale_linetype_manual(values = c(D = "dashed", W = "dashed"), guide = "none") +
+  scale_x_continuous(
+    breaks = c(0, 14, 30, 60, 120),
+    labels = c("T0\n(0d)", "T1\n(14d)", "T2\n(30d)", "T3\n(60d)", "T4\n(120d)")
+  ) +
+  labs(
+    title = "Observed vs. Expected Calcite Dissolution Kinetics",
+    x = "Incubation Time",
+    y = "DIC (mM)"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5), # Título centrado idéntico
+    axis.title = element_text(face = "bold", size = 16),
+    axis.text = element_text(size = 13, color = "black"),
+    strip.text = element_text(face = "bold", size = 15),
+    legend.title = element_text(face = "bold", size = 15),
+    legend.text = element_text(size = 14),                          # Sintaxis corregida
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  )
+
+# Guardar la imagen
+ggsave("poster_panels_expected.png", p_expected_real, width = 11, height = 8, dpi = 300)
+
+cat("\nGrafico renderizado con exito como poster_panels_expected.png\n")
