@@ -1,0 +1,178 @@
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+EFFLUX RATE
+
+# ---------------------------------------------------------
+# 1. Cargar Datos Reales
+# ---------------------------------------------------------
+setwd("C:/Experimentcalcite/data")
+
+co2_data <- read.csv("co2_data.csv", fileEncoding = "UTF-8-BOM")
+names(co2_data) <- c("SAMPLE", "TIME", "SITE", "STAGE", "TREATMENT", "CO2_ppm")
+
+# ---------------------------------------------------------
+# 2. Parámetros Físicos y Función de Flujo
+# ---------------------------------------------------------
+col_D <- "#B08968"  # Dry
+col_W <- "#4A7C82"  # Wet
+
+R_gas <- 0.0820573       # L*atm/(mol*K)
+T_kelvin <- 298.15       # 25°C
+P_atm <- 1.0
+V_headspace_L <- 0.076   # 76 mL
+A_sedimento_m2 <- 0.00196   # Diametro pyrex 50mm, por tanto, radio = 25 mm = 2,5 cm, entonces, A = π × r² = π × 2,5² = 19,6 cm² = 0,00196 m²
+incubation_time_h <- 24
+
+
+#Acá lo que hace esta funcion al multiplicar por e-6 es pasar de ppm a fraccion molar, luego se aplica PV=nRT para tener los moles y tenemos el delta C en mol.
+
+ppm_to_flux <- function(delta_ppm) {
+  delta_C_mol <- (delta_ppm * 1e-6) * (P_atm * V_headspace_L) / (R_gas * T_kelvin)
+  return((delta_C_mol * 1e6) / (incubation_time_h * A_sedimento_m2))
+}
+
+# Luego se pasa a micromoles y se divide entre horas y superficie del pyrex que es el area expuesta
+
+# ---------------------------------------------------------
+# 3. Emparejar Muestras Iniciales/Finales y Calcular Flujo
+# ---------------------------------------------------------
+
+#Acá identifica cada muestra al hacer el mutate, luego en select identifica el tiempo y si es inicial o final, 
+#En pivot reestructura la tabla y en rename les pone el nombre respecto al inicio y final,
+#Finalmente hace la resta entre final e inicial y convierte con la funcion del punto 2, las ppm a la tasa de flujo real en umol*m-2h-1
+
+co2_flux_samples <- co2_data %>%
+  mutate(REPLICATE_ID = gsub("(T\\d+)[IF](-.*)", "\\1\\2", SAMPLE)) %>% #Acá identifica cada muestra
+  select(REPLICATE_ID, TIME, SITE, TREATMENT, STAGE, CO2_ppm) %>%
+  pivot_wider(names_from = STAGE, values_from = CO2_ppm) %>%
+  rename(CO2_initial = `I`, CO2_final = `F`) %>%
+  mutate(
+    delta_ppm = CO2_final - CO2_initial,
+    flux_umol_m2_h = ppm_to_flux(delta_ppm)
+  )
+
+# ---------------------------------------------------------
+# 4. Resumen y Etiquetado (Dry / Wet & t0 a t4)
+# ---------------------------------------------------------
+
+#Acá crea la etiqueta de los tiempos, agrupa segun tiempo, tratamiento y sitio, saca mean y sd, ignora los NA, y desagrupa los grupos que creo, no entiendo bien porque los desagrupa.
+
+etiquetas_tiempo_todas <- c("t0\n(0d)", "t1\n(14d)", "t2\n(30d)", "t3\n(60d)", "t4\n(120d)")
+
+co2_summary <- co2_flux_samples %>%
+  group_by(TIME, SITE, TREATMENT) %>%
+  summarise(
+    mean_flux = mean(flux_umol_m2_h, na.rm = TRUE),
+    sd_flux = sd(flux_umol_m2_h, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    site = factor(SITE, levels = c("A", "B"), labels = c("Site Low OM", "Site High OM")),
+    time_factor = factor(TIME, levels = 0:4, labels = etiquetas_tiempo_todas),
+    treatment = factor(TREATMENT, levels = c("D", "W"), labels = c("Dry", "Wet"))
+  ) %>%
+  complete(site, time_factor = factor(etiquetas_tiempo_todas, levels = etiquetas_tiempo_todas), treatment)
+# En la parte final de este apartado, le pone los nombres que le pedi para el poster.
+
+# ---------------------------------------------------------
+# 5. Flujos Esperados (Dry / Wet) , es al azar no hay razon para elegir estos valores, solo explicaban visualmente lo que queria decir.
+# ---------------------------------------------------------
+co2_esperado <- expand.grid(
+  time_factor = factor(etiquetas_tiempo_todas, levels = etiquetas_tiempo_todas),
+  site = factor(c("Site Low OM", "Site High OM"), levels = c("Site Low OM", "Site High OM")),
+  treatment_raw = c("D", "W")
+) %>%
+  mutate(
+    time_days = case_when(
+      time_factor == "t0\n(0d)" ~ 0,
+      time_factor == "t1\n(14d)" ~ 14,
+      time_factor == "t2\n(30d)" ~ 30,
+      time_factor == "t3\n(60d)" ~ 60,
+      time_factor == "t4\n(120d)" ~ 120
+    ),
+
+    delta_expected_ppm = case_when(
+      site == "Site Low OM" & treatment_raw == "D" ~ 700 + time_days * 6,
+      site == "Site High OM" & treatment_raw == "D" ~ 1000 + time_days * 8,
+      site == "Site Low OM" & treatment_raw == "W" ~ 750 + time_days * 15,
+      site == "Site High OM" & treatment_raw == "W" ~ 950 + time_days * 18,
+      TRUE ~ 500
+    ),
+    expected_flux = ppm_to_flux(delta_expected_ppm),
+    treatment = factor(treatment_raw, levels = c("D", "W"), labels = c("Dry", "Wet"))
+  )
+
+# Los valores dados para lo esperado, NO son valores sacados de la literatura.
+
+# ---------------------------------------------------------
+# 6. Generar Gráfico Final
+# ---------------------------------------------------------
+# La parte final es estetica, y a ensayo y error quedó como la quería.
+
+
+p_co2_barras <- ggplot() +
+  # Marcos punteados esperados
+  geom_col(
+    data = co2_esperado,
+    aes(x = time_factor, y = expected_flux, group = treatment, color = treatment),
+    fill = NA,
+    linetype = "dashed",
+    linewidth = 0.5,
+    position = position_dodge(width = 0.7),
+    width = 0.55
+  ) +
+  
+  # Barras observadas reales
+  geom_col(
+    data = co2_summary,
+    aes(x = time_factor, y = mean_flux, fill = treatment, group = treatment),
+    position = position_dodge(width = 0.7),
+    width = 0.45,
+    alpha = 0.9,
+    na.rm = TRUE
+  ) +
+  
+  # Barras de error centradas
+  geom_errorbar(
+    data = co2_summary,
+    aes(x = time_factor, ymin = mean_flux - sd_flux, ymax = mean_flux + sd_flux, group = treatment),
+    position = position_dodge(width = 0.7),
+    width = 0.15,
+    linewidth = 0.5,
+    color = "black",
+    na.rm = TRUE
+  ) +
+  
+  facet_wrap(~ site) +
+  
+  scale_fill_manual(values = c(Dry = col_D, Wet = col_W), name = "Observed", drop = FALSE) +
+  scale_color_manual(values = c(Dry = col_D, Wet = col_W), name = "Expected (dashed)", drop = FALSE) +
+  
+  labs(
+    title = expression(bold("CO"[2]*" Efflux Rate (Headspace)")),
+    subtitle = "Solid bars: Measured mean ± SD | Dashed frames: Expected target",
+    x = "Time",
+    y = expression(bold("CO"[2]*" Flux ["*mu*"mol C m"^-2*" h"^-1*"]"))
+  ) +
+  
+  theme_bw(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30", margin = margin(b = 10)),
+    panel.background = element_rect(fill = "white", color = NA),
+    panel.grid.major = element_line(color = "gray90", linewidth = 0.5),
+    panel.grid.minor = element_line(color = "gray95", linewidth = 0.25),
+    panel.border = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.5),
+    strip.background = element_rect(fill = "gray92", color = NA),
+    strip.text = element_text(face = "bold", size = 12),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black"),
+    legend.position = "top"
+  )
+
+print(p_co2_barras)
+ggsave("poster_panel_co2_flux_final.png", p_co2_barras, width = 11, height = 6, dpi = 300)
+
