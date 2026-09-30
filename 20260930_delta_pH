@@ -1,1 +1,43 @@
-jfhlkjs
+cargar librerias y ruta
+
+
+
+### ----------------------------------------------------------------------------
+### CÁLCULO DE DELTAS (pH_Final - pH_Inicial) Y EVALUACIÓN DE SUPUESTOS
+### ----------------------------------------------------------------------------
+
+# 1. Vincular los datos pareados (Final - Inicial) por réplica
+ph_deltas <- ph_clean %>%
+  select(Code.repuesto, SITE, TREATMENT, TIME, LAYER, Replicate, STAGE, pH) %>%
+  pivot_wider(names_from = STAGE, values_from = pH) %>%
+  rename(pH_initial = `I`, pH_final = `F`) %>%
+  filter(!is.na(pH_initial) & !is.na(pH_final)) %>%
+  mutate(delta_pH = pH_final - pH_initial)
+
+# 2. Evaluación de Normalidad por Subgrupo (Shapiro-Wilk)
+cat("=========================================================\n")
+cat(" 1. NORMALIDAD DEL DELTA DE pH (Shapiro-Wilk)           \n")
+cat("=========================================================\n\n")
+
+shapiro_deltas <- ph_deltas %>%
+  group_by(SITE, LAYER, TREATMENT, TIME) %>%
+  summarise(
+    n = n(),
+    W = ifelse(n >= 3, shapiro.test(delta_pH)$statistic, NA),
+    p_value = ifelse(n >= 3, shapiro.test(delta_pH)$p.value, NA),
+    .groups = "drop"
+  ) %>%
+  mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
+
+print(as.data.frame(shapiro_deltas))
+
+# 3. Evaluación de Homocedasticidad por Capa (Prueba de Levene)
+cat("\n=========================================================\n")
+cat(" 2. HOMOCEDASTICIDAD DEL DELTA DE pH (Prueba de Levene)  \n")
+cat("=========================================================\n\n")
+
+levene_delta_OL <- leveneTest(delta_pH ~ SITE * TREATMENT * TIME, data = filter(ph_deltas, LAYER == "OL"))
+levene_delta_PW <- leveneTest(delta_pH ~ SITE * TREATMENT * TIME, data = filter(ph_deltas, LAYER == "PW"))
+
+cat("Delta pH - Agua Sobrenadante (OL) p-value:", levene_delta_OL$`Pr(>F)`[1], "\n")
+cat("Delta pH - Agua de Poro (PW)       p-value:", levene_delta_PW$`Pr(>F)`[1], "\n")
