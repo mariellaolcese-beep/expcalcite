@@ -6,6 +6,9 @@ library(tidyr)
 library(car)
 library(emmeans) 
 
+# 1. Cargamos el archivo ph_data.csv
+ph_data <- read.csv("ph_data.csv", header = TRUE, sep = ",")
+
 ## PREPARAMOS LOS DATOS INICIALES (STAGE == 'I') ###
 #Cargamos y preparamos nuestros datos
 ph_clean <- ph_data %>%
@@ -81,3 +84,79 @@ print(summary(mod_PW_W))
 cat("\n--- Comparaciones Múltiples de Tukey (TIME) en PW (Tratamiento W) ---\n")
 tukey_PW_W <- emmeans(mod_PW_W, pairwise ~ TIME, adjust = "tukey")
 print(tukey_PW_W$contrasts)
+
+### EVALUACIÓN DE NORMALIDAD, HOMOCEDASTICIDAD Y DIFERENCIAS PARA pH FINAL (STAGE == 'F') ###
+
+library(dplyr)
+library(tidyr)
+library(car)
+library(emmeans) 
+
+### PREPARACIÓN DE LOS DATOS FINALES (STAGE == 'F') ###
+
+ph_clean <- ph_data %>%
+  rename(
+    SITE = site..A.B.,
+    TREATMENT = treatment..D.W.,
+    TIME = tiempo..t0.etc.,
+    STAGE = sacrificio.I.F
+  ) %>%
+  pivot_longer(
+    cols = c(pH_OL, pH_PW),
+    names_to = "LAYER",
+    values_to = "pH"
+  ) %>%
+  mutate(
+    LAYER = ifelse(LAYER == "pH_OL", "OL", "PW"),
+    SITE = as.factor(SITE),
+    TREATMENT = as.factor(TREATMENT),
+    TIME = as.factor(TIME)
+  )
+
+# Filtrar para seleccionar solo el grupo Final y remover NAs
+ph_final <- ph_clean %>%
+  filter(STAGE == "F" & !is.na(pH))
+
+### TEST DE NORMALIDAD (SHAPIRO-WILK) POR SUBGRUPO ###
+
+shapiro_final <- ph_final %>%
+  group_by(SITE, LAYER, TREATMENT, TIME) %>%
+  summarise(
+    n = n(),
+    W = ifelse(n >= 3, shapiro.test(pH)$statistic, NA),
+    p_value = ifelse(n >= 3, shapiro.test(pH)$p.value, NA),
+    .groups = "drop"
+  ) %>%
+  mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
+
+cat("--- Prueba de Shapiro-Wilk por Subgrupo (STAGE = 'F') ---\n")
+print(as.data.frame(shapiro_final))
+
+### TEST DE HOMOCEDASTICIDAD (LEVENE POR CAPA) ###
+
+
+levene_OL_final <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "OL"))
+levene_PW_final <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "PW"))
+
+cat("Agua Sobrenadante (OL) - p-value:", levene_OL_final$`Pr(>F)`[1], "\n")
+cat("Agua de Poro (PW)       - p-value:", levene_PW_final$`Pr(>F)`[1], "\n")
+
+### MODELOS ANOVA Y COMPARACIONES POST-HOC (STAGE = 'F') ###
+
+# A. Agua Sobrenadante (OL)
+cat(">>> AGUA SOBRENADANTE (OL) - MODELO COMPLETO <<<\n")
+mod_OL_final <- aov(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "OL"))
+print(summary(mod_OL_final))
+
+cat("\n--- Comparaciones Múltiples de Tukey en OL ---\n")
+tukey_OL_final <- emmeans(mod_OL_final, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
+print(tukey_OL_final$contrasts)
+
+# B. Agua de Poro (PW)
+cat(">>> AGUA DE PORO (PW) - MODELO COMPLETO <<<\n")
+mod_PW_final <- aov(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "PW"))
+print(summary(mod_PW_final))
+
+cat("\n--- Comparaciones Múltiples de Tukey en PW ---\n")
+tukey_PW_final <- emmeans(mod_PW_final, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
+print(tukey_PW_final$contrasts)
