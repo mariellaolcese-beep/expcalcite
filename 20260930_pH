@@ -1,16 +1,15 @@
-### PRIMERO MIRAREMOS NORMALIDAD Y HOMOCEDASTICIDAD DE LOS DATOS, PARA ESTO UTILIZAREMOS SOLO LOS TREATMENTS INITIALS ###
-
-### DESCARGAMOS LIBRERIAS ###
+### ----------------------------------------------------------------------------
+### 1. CARGA DE LIBRERÍAS Y DATOS
+### ----------------------------------------------------------------------------
 library(dplyr)
 library(tidyr)
 library(car)
-library(emmeans) 
+library(emmeans)
 
-# 1. Cargamos el archivo ph_data.csv
+# Cargar el archivo ph_data.csv
 ph_data <- read.csv("ph_data.csv", header = TRUE, sep = ",")
 
-## PREPARAMOS LOS DATOS INICIALES (STAGE == 'I') ###
-#Cargamos y preparamos nuestros datos
+# Limpieza y estructuración general
 ph_clean <- ph_data %>%
   rename(
     SITE = site..A.B.,
@@ -30,17 +29,18 @@ ph_clean <- ph_data %>%
     TIME = as.factor(TIME)
   )
 
-#Filtramos para seleccionar solo el grupo Inicial
-shapiro_inicial <- ph_inicial %>%
-  group_by(SITE, LAYER, TREATMENT, TIME) %>%
-  summarise(
-    n = n(),
-    W = ifelse(n >= 3, shapiro.test(pH)$statistic, NA),
-    p_value = ifelse(n >= 3, shapiro.test(pH)$p.value, NA),
-    .groups = "drop"
-  ) %>%
+### ----------------------------------------------------------------------------
+### 2. PARTE I: ANÁLISIS DE LA ETAPA INICIAL (STAGE == 'I')
+### ----------------------------------------------------------------------------
+cat("=========================================================\n")
+cat("            ETAPA INICIAL (STAGE = 'I')                  \n")
+cat("=========================================================\n\n")
 
-###  TEST NORMALIDAD SHAPIRO-WILK  ###
+# A. Filtrar objeto inicial (resuelve el error 'ph_inicial not found')
+ph_inicial <- ph_clean %>%
+  filter(STAGE == "I" & !is.na(pH))
+
+# B. Normalidad (Shapiro-Wilk) - Etapa Inicial
 shapiro_inicial <- ph_inicial %>%
   group_by(SITE, LAYER, TREATMENT, TIME) %>%
   summarise(
@@ -51,74 +51,48 @@ shapiro_inicial <- ph_inicial %>%
   ) %>%
   mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
 
-cat("--- Prueba de Shapiro-Wilk por Subgrupo ---\n")
+cat("--- Shapiro-Wilk Por Subgrupo (STAGE = 'I') ---\n")
 print(as.data.frame(shapiro_inicial))
 
-###  TEST HOMOCEDASTICIDAD  ###
+# C. Homocedasticidad (Levene) por Capa - Etapa Inicial
+cat("\n--- Prueba de Levene (STAGE = 'I') ---\n")
+levene_OL_ini <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_inicial, LAYER == "OL"))
+levene_PW_ini <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_inicial, LAYER == "PW"))
 
-levene_OL <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_inicial, LAYER == "OL"))
-levene_PW <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_inicial, LAYER == "PW"))
+cat("Agua Sobrenadante (OL) - p-value:", levene_OL_ini$`Pr(>F)`[1], "\n")
+cat("Agua de Poro (PW)       - p-value:", levene_PW_ini$`Pr(>F)`[1], "\n\n")
 
-cat("Agua Sobrenadante (OL) - p-value:", levene_OL$`Pr(>F)`[1], "\n")
-cat("Agua de Poro (PW)       - p-value:", levene_PW$`Pr(>F)`[1], "\n")
+# D. Modelos ANOVA y Post-Hoc en Tratamiento W - Etapa Inicial
+cat(">>> OL (Tratamiento W) - Inicial <<<\n")
+ph_OL_W_ini <- filter(ph_inicial, LAYER == "OL" & TREATMENT == "W")
+mod_OL_W_ini <- aov(pH ~ SITE * TIME, data = ph_OL_W_ini)
+print(summary(mod_OL_W_ini))
 
+cat("\n--- Tukey (TIME) en OL (W) ---\n")
+tukey_OL_W_ini <- emmeans(mod_OL_W_ini, pairwise ~ TIME, adjust = "tukey")
+print(tukey_OL_W_ini$contrasts)
 
-# MODELOS ANOVA Y POST-HOC EN TRATAMIENTO W (Serie Completa)
+cat("\n>>> PW (Tratamiento W) - Inicial <<<\n")
+ph_PW_W_ini <- filter(ph_inicial, LAYER == "PW" & TREATMENT == "W")
+mod_PW_W_ini <- aov(pH ~ SITE * TIME, data = ph_PW_W_ini)
+print(summary(mod_PW_W_ini))
 
-# A. Agua Sobrenadante (OL) - Tratamiento W
-cat(">>> AGUA SOBRENADANTE (OL) - TRATAMIENTO W <<<\n")
-ph_OL_W <- filter(ph_inicial, LAYER == "OL" & TREATMENT == "W")
-mod_OL_W <- aov(pH ~ SITE * TIME, data = ph_OL_W)
-print(summary(mod_OL_W))
+cat("\n--- Tukey (TIME) en PW (W) ---\n")
+tukey_PW_W_ini <- emmeans(mod_PW_W_ini, pairwise ~ TIME, adjust = "tukey")
+print(tukey_PW_W_ini$contrasts)
 
-cat("\n--- Comparaciones Múltiples de Tukey (TIME) en OL (Tratamiento W) ---\n")
-tukey_OL_W <- emmeans(mod_OL_W, pairwise ~ TIME, adjust = "tukey")
-print(tukey_OL_W$contrasts)
+### ----------------------------------------------------------------------------
+### 3. PARTE II: ANÁLISIS DE LA ETAPA FINAL (STAGE == 'F')
+### ----------------------------------------------------------------------------
+cat("\n=========================================================\n")
+cat("              ETAPA FINAL (STAGE = 'F')                  \n")
+cat("=========================================================\n\n")
 
-# B. Agua de Poro (PW) - Tratamiento W
-cat(">>> AGUA DE PORO (PW) - TRATAMIENTO W <<<\n")
-ph_PW_W <- filter(ph_inicial, LAYER == "PW" & TREATMENT == "W")
-mod_PW_W <- aov(pH ~ SITE * TIME, data = ph_PW_W)
-print(summary(mod_PW_W))
-
-cat("\n--- Comparaciones Múltiples de Tukey (TIME) en PW (Tratamiento W) ---\n")
-tukey_PW_W <- emmeans(mod_PW_W, pairwise ~ TIME, adjust = "tukey")
-print(tukey_PW_W$contrasts)
-
-### EVALUACIÓN DE NORMALIDAD, HOMOCEDASTICIDAD Y DIFERENCIAS PARA pH FINAL (STAGE == 'F') ###
-
-library(dplyr)
-library(tidyr)
-library(car)
-library(emmeans) 
-
-### PREPARACIÓN DE LOS DATOS FINALES (STAGE == 'F') ###
-
-ph_clean <- ph_data %>%
-  rename(
-    SITE = site..A.B.,
-    TREATMENT = treatment..D.W.,
-    TIME = tiempo..t0.etc.,
-    STAGE = sacrificio.I.F
-  ) %>%
-  pivot_longer(
-    cols = c(pH_OL, pH_PW),
-    names_to = "LAYER",
-    values_to = "pH"
-  ) %>%
-  mutate(
-    LAYER = ifelse(LAYER == "pH_OL", "OL", "PW"),
-    SITE = as.factor(SITE),
-    TREATMENT = as.factor(TREATMENT),
-    TIME = as.factor(TIME)
-  )
-
-# Filtrar para seleccionar solo el grupo Final y remover NAs
+# A. Filtrar objeto final
 ph_final <- ph_clean %>%
   filter(STAGE == "F" & !is.na(pH))
 
-### TEST DE NORMALIDAD (SHAPIRO-WILK) POR SUBGRUPO ###
-
+# B. Normalidad (Shapiro-Wilk) - Etapa Final
 shapiro_final <- ph_final %>%
   group_by(SITE, LAYER, TREATMENT, TIME) %>%
   summarise(
@@ -129,34 +103,30 @@ shapiro_final <- ph_final %>%
   ) %>%
   mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
 
-cat("--- Prueba de Shapiro-Wilk por Subgrupo (STAGE = 'F') ---\n")
+cat("--- Shapiro-Wilk Por Subgrupo (STAGE = 'F') ---\n")
 print(as.data.frame(shapiro_final))
 
-### TEST DE HOMOCEDASTICIDAD (LEVENE POR CAPA) ###
+# C. Homocedasticidad (Levene) por Capa - Etapa Final
+cat("\n--- Prueba de Levene (STAGE = 'F') ---\n")
+levene_OL_fin <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "OL"))
+levene_PW_fin <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "PW"))
 
+cat("Agua Sobrenadante (OL) - p-value:", levene_OL_fin$`Pr(>F)`[1], "\n")
+cat("Agua de Poro (PW)       - p-value:", levene_PW_fin$`Pr(>F)`[1], "\n\n")
 
-levene_OL_final <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "OL"))
-levene_PW_final <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "PW"))
+# D. Modelos ANOVA y Post-Hoc Completos - Etapa Final
+cat(">>> OL (Modelo Completo) - Final <<<\n")
+mod_OL_fin <- aov(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "OL"))
+print(summary(mod_OL_fin))
 
-cat("Agua Sobrenadante (OL) - p-value:", levene_OL_final$`Pr(>F)`[1], "\n")
-cat("Agua de Poro (PW)       - p-value:", levene_PW_final$`Pr(>F)`[1], "\n")
+cat("\n--- Tukey en OL - Final ---\n")
+tukey_OL_fin <- emmeans(mod_OL_fin, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
+print(tukey_OL_fin$contrasts)
 
-### MODELOS ANOVA Y COMPARACIONES POST-HOC (STAGE = 'F') ###
+cat("\n>>> PW (Modelo Completo) - Final <<<\n")
+mod_PW_fin <- aov(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "PW"))
+print(summary(mod_PW_fin))
 
-# A. Agua Sobrenadante (OL)
-cat(">>> AGUA SOBRENADANTE (OL) - MODELO COMPLETO <<<\n")
-mod_OL_final <- aov(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "OL"))
-print(summary(mod_OL_final))
-
-cat("\n--- Comparaciones Múltiples de Tukey en OL ---\n")
-tukey_OL_final <- emmeans(mod_OL_final, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
-print(tukey_OL_final$contrasts)
-
-# B. Agua de Poro (PW)
-cat(">>> AGUA DE PORO (PW) - MODELO COMPLETO <<<\n")
-mod_PW_final <- aov(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "PW"))
-print(summary(mod_PW_final))
-
-cat("\n--- Comparaciones Múltiples de Tukey en PW ---\n")
-tukey_PW_final <- emmeans(mod_PW_final, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
-print(tukey_PW_final$contrasts)
+cat("\n--- Tukey en PW - Final ---\n")
+tukey_PW_fin <- emmeans(mod_PW_fin, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
+print(tukey_PW_fin$contrasts)
