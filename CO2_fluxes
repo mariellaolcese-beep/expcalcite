@@ -22,7 +22,7 @@ R_gas <- 0.0820573       # L*atm/(mol*K)
 T_kelvin <- 298.15       # 25°C
 P_atm <- 1.0
 V_headspace_L <- 0.076   # 76 mL
-A_sedimento_m2 <- 0.00196   # Diametro pyrex 50mm, por tanto, radio = 25 mm = 2,5 cm, entonces, A = π × r² = π × 2,5² = 19,6 cm² = 0,00196 m²
+A_sedimento_m2 <- 0.00196   # Diametro pyrex 50mm, por tanto, radio = 25 mm = 2,5 cm, entonces, A = π × r² = π × 2,5² = 19,6 cm² = 0,00196 m²  # # Ver si usar diametro de 53mm!
 incubation_time_h <- 24
 
 
