@@ -1,6 +1,7 @@
-### ----------------------------------------------------------------------------
-### 1. CARGA DE LIBRERÍAS Y DATOS
-### ----------------------------------------------------------------------------
+### ============================================================================
+### 1. CARGA DE LIBRERÍAS Y PREPARACIÓN DE DATOS
+### ============================================================================
+
 library(dplyr)
 library(tidyr)
 library(car)
@@ -10,7 +11,7 @@ library(ggplot2)
 # Cargar el archivo ph_data.csv
 ph_data <- read.csv("ph_data.csv", header = TRUE, sep = ",")
 
-# Limpieza y estructuración general
+# Limpieza y estructuración general del dataset completo
 ph_clean <- ph_data %>%
   rename(
     SITE = site..A.B.,
@@ -30,73 +31,24 @@ ph_clean <- ph_data %>%
     TIME = as.factor(TIME)
   )
 
-### ----------------------------------------------------------------------------
-### 2. PARTE I: ANÁLISIS DE LA ETAPA INICIAL (STAGE == 'I')
-### ----------------------------------------------------------------------------
-cat("=========================================================\n")
-cat("            ETAPA INICIAL (STAGE = 'I')                  \n")
-cat("=========================================================\n\n")
 
-# A. Filtrar objeto inicial (resuelve el error 'ph_inicial not found')
-ph_inicial <- ph_clean %>%
-  filter(STAGE == "I" & !is.na(pH))
+### ============================================================================
+### 2. VISIÓN GENERAL: TODOS LOS DATOS (GLOBAL)
+### ============================================================================
 
-# B. Normalidad (Shapiro-Wilk) - Etapa Inicial
-shapiro_inicial <- ph_inicial %>%
-  group_by(SITE, LAYER, TREATMENT, TIME) %>%
-  summarise(
-    n = n(),
-    W = ifelse(n >= 3, shapiro.test(pH)$statistic, NA),
-    p_value = ifelse(n >= 3, shapiro.test(pH)$p.value, NA),
-    .groups = "drop"
-  ) %>%
-  mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
+# --- 2.1 Gráfico 1: Líneas de pH (Media ± Error Estándar - Todos los datos) ---
+cat("\n--- Generando Gráfico Global 1: Evolución del pH (Líneas) ---\n")
 
-cat("--- Shapiro-Wilk Por Subgrupo (STAGE = 'I') ---\n")
-print(as.data.frame(shapiro_inicial))
-
-# C. Homocedasticidad (Levene) por Capa - Etapa Inicial
-cat("\n--- Prueba de Levene (STAGE = 'I') ---\n")
-levene_OL_ini <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_inicial, LAYER == "OL"))
-levene_PW_ini <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_inicial, LAYER == "PW"))
-
-cat("Agua Sobrenadante (OL) - p-value:", levene_OL_ini$`Pr(>F)`[1], "\n")
-cat("Agua de Poro (PW)       - p-value:", levene_PW_ini$`Pr(>F)`[1], "\n\n")
-
-# D. Modelos ANOVA y Post-Hoc en Tratamiento W - Etapa Inicial
-cat(">>> OL (Tratamiento W) - Inicial <<<\n")
-ph_OL_W_ini <- filter(ph_inicial, LAYER == "OL" & TREATMENT == "W")
-mod_OL_W_ini <- aov(pH ~ SITE * TIME, data = ph_OL_W_ini)
-print(summary(mod_OL_W_ini))
-
-cat("\n--- Tukey (TIME) en OL (W) ---\n")
-tukey_OL_W_ini <- emmeans(mod_OL_W_ini, pairwise ~ TIME, adjust = "tukey")
-print(tukey_OL_W_ini$contrasts)
-
-cat("\n>>> PW (Tratamiento W) - Inicial <<<\n")
-ph_PW_W_ini <- filter(ph_inicial, LAYER == "PW" & TREATMENT == "W")
-mod_PW_W_ini <- aov(pH ~ SITE * TIME, data = ph_PW_W_ini)
-print(summary(mod_PW_W_ini))
-
-cat("\n--- Tukey (TIME) en PW (W) ---\n")
-tukey_PW_W_ini <- emmeans(mod_PW_W_ini, pairwise ~ TIME, adjust = "tukey")
-print(tukey_PW_W_ini$contrasts)
-
-=========================================================
-   GENERACIÓN DE GRÁFICO DE pH POR TIEMPO//EL BASICO 
-=========================================================
-
-# Gráfico de líneas (media ± error estándar) y puntos para la evolución del pH
-plot_ph_tiempo <- ggplot(ph_clean %>% filter(!is.na(pH)), 
-                         aes(x = TIME, y = pH, color = LAYER, group = LAYER)) +
+plot_ph_lineas_global <- ggplot(ph_clean %>% filter(!is.na(pH)), 
+                                aes(x = TIME, y = pH, color = LAYER, group = LAYER)) +
   stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
   stat_summary(fun = mean, geom = "point", size = 2.5) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
   facet_grid(SITE ~ TREATMENT, labeller = label_both) +
   scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
   labs(
-    title = "Evolución del pH a través del Tiempo",
-    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro)",
+    title = "Evolución General del pH a través del Tiempo",
+    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro) por Sitio y Tratamiento",
     x = "Tiempo",
     y = "pH",
     color = "Capa (LAYER)"
@@ -110,56 +62,51 @@ plot_ph_tiempo <- ggplot(ph_clean %>% filter(!is.na(pH)),
     strip.background = element_rect(fill = "#f0f0f0")
   )
 
-# Mostrar el gráfico en pantalla
-print(plot_ph_tiempo)
+print(plot_ph_lineas_global)
 
-# Opcional: Guardar el gráfico en archivo de imagen
-# ggsave("cambios_pH_tiempo.png", plot = plot_ph_tiempo, width = 8, height = 6, dpi = 300)
+# --- 2.2 Gráfico 2: Puntos de mediciones individuales (Todos los datos) ---
+cat("\n--- Generando Gráfico Global 2: Medidas Individuales de pH (Puntos) ---\n")
 
-=========================================================
-   AHORA HACEMOS LO MISMO PERO MIRANDO SOLO WET 
-=========================================================
-
-### 1. CARGA DE LIBRERÍAS Y DATOS
-
-library(dplyr)
-library(tidyr)
-library(car)
-library(emmeans)
-library(ggplot2)
-
-# Cargar el archivo ph_data.csv
-ph_data <- read.csv("ph_data.csv", header = TRUE, sep = ",")
-
-# Limpieza y estructuración general
-ph_clean <- ph_data %>%
-  rename(
-    SITE = site..A.B.,
-    TREATMENT = treatment..D.W.,
-    TIME = tiempo..t0.etc.,
-    STAGE = sacrificio.I.F
-  ) %>%
-  pivot_longer(
-    cols = c(pH_OL, pH_PW),
-    names_to = "LAYER",
-    values_to = "pH"
-  ) %>%
-  mutate(
-    LAYER = ifelse(LAYER == "pH_OL", "OL", "PW"),
-    SITE = as.factor(SITE),
-    TREATMENT = as.factor(TREATMENT),
-    TIME = as.factor(TIME)
+plot_ph_puntos_global <- ggplot(ph_clean %>% filter(!is.na(pH)), 
+                                aes(x = TIME, y = pH, color = LAYER)) +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
+    size = 2.5, 
+    alpha = 0.8
+  ) +
+  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Todas las Medidas de pH por Tiempo (Todos los Datos)",
+    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro) por Sitio y Tratamiento",
+    x = "Tiempo",
+    y = "pH",
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
   )
 
-### 2. PARTE I: ANÁLISIS DE LA ETAPA INICIAL (STAGE == 'I')
-###  ETAPA INICIAL (STAGE = 'I')                 
+print(plot_ph_puntos_global)
 
 
-# A. Filtrar objeto inicial (resuelve el error 'ph_inicial not found')
+### ============================================================================
+### 3. ETAPA INICIAL (STAGE == 'I')
+### ============================================================================
+
+# --- 3.1 Filtrado de datos ---
 ph_inicial <- ph_clean %>%
   filter(STAGE == "I" & !is.na(pH))
 
-# B. Normalidad (Shapiro-Wilk) - Etapa Inicial
+ph_inicial_W <- ph_inicial %>% 
+  filter(TREATMENT == "W")
+
+# --- 3.2 Análisis Estadístico: Normalidad (Shapiro-Wilk) ---
 shapiro_inicial <- ph_inicial %>%
   group_by(SITE, LAYER, TREATMENT, TIME) %>%
   summarise(
@@ -170,54 +117,47 @@ shapiro_inicial <- ph_inicial %>%
   ) %>%
   mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
 
-cat("--- Shapiro-Wilk Por Subgrupo (STAGE = 'I') ---\n")
+cat("\n--- Shapiro-Wilk Por Subgrupo (STAGE = 'I') ---\n")
 print(as.data.frame(shapiro_inicial))
 
-# C. Homocedasticidad (Levene) por Capa - Etapa Inicial
+# --- 3.3 Homocedasticidad (Levene) por Capa ---
 cat("\n--- Prueba de Levene (STAGE = 'I') ---\n")
 levene_OL_ini <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_inicial, LAYER == "OL"))
 levene_PW_ini <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_inicial, LAYER == "PW"))
 
 cat("Agua Sobrenadante (OL) - p-value:", levene_OL_ini$`Pr(>F)`[1], "\n")
-cat("Agua de Poro (PW)       - p-value:", levene_PW_ini$`Pr(>F)`[1], "\n\n")
+cat("Agua de Poro (PW)        - p-value:", levene_PW_ini$`Pr(>F)`[1], "\n")
 
-# D. Modelos ANOVA y Post-Hoc en Tratamiento W - Etapa Inicial
-cat(">>> OL (Tratamiento W) - Inicial <<<\n")
-ph_OL_W_ini <- filter(ph_inicial, LAYER == "OL" & TREATMENT == "W")
-mod_OL_W_ini <- aov(pH ~ SITE * TIME, data = ph_OL_W_ini)
+# --- 3.4 Modelos ANOVA y Post-Hoc (Tratamiento W) ---
+cat("\n>>> OL (Tratamiento W) - Inicial <<<\n")
+mod_OL_W_ini <- aov(pH ~ SITE * TIME, data = filter(ph_inicial_W, LAYER == "OL"))
 print(summary(mod_OL_W_ini))
 
-cat("\n--- Tukey (TIME) en OL (W) ---\n")
+cat("\n--- Tukey (TIME) en OL (W) - Inicial ---\n")
 tukey_OL_W_ini <- emmeans(mod_OL_W_ini, pairwise ~ TIME, adjust = "tukey")
 print(tukey_OL_W_ini$contrasts)
 
 cat("\n>>> PW (Tratamiento W) - Inicial <<<\n")
-ph_PW_W_ini <- filter(ph_inicial, LAYER == "PW" & TREATMENT == "W")
-mod_PW_W_ini <- aov(pH ~ SITE * TIME, data = ph_PW_W_ini)
+mod_PW_W_ini <- aov(pH ~ SITE * TIME, data = filter(ph_inicial_W, LAYER == "PW"))
 print(summary(mod_PW_W_ini))
 
-cat("\n--- Tukey (TIME) en PW (W) ---\n")
+cat("\n--- Tukey (TIME) en PW (W) - Inicial ---\n")
 tukey_PW_W_ini <- emmeans(mod_PW_W_ini, pairwise ~ TIME, adjust = "tukey")
 print(tukey_PW_W_ini$contrasts)
 
-### ----------------------------------------------------------------------------
-### 3. VISUALIZACIÓN DE CAMBIOS DE pH EN EL TIEMPO (SÓLO TRATAMIENTO W)
-### ----------------------------------------------------------------------------
+# --- 3.5 Visualización de Tratamiento W (Etapa Inicial 'I') ---
+cat("\n--- Generando Gráficos: Etapa Inicial (STAGE I - W) ---\n")
 
-# Filtrar datos únicamente para el Tratamiento W
-ph_tratamiento_W <- ph_clean %>% 
-  filter(TREATMENT == "W" & !is.na(pH))
-
-# Gráfico de líneas (media ± error estándar) y puntos para la evolución del pH
-plot_ph_tiempo_W <- ggplot(ph_tratamiento_W, 
-                            aes(x = TIME, y = pH, color = LAYER, group = LAYER)) +
+# Gráfico 1: Líneas de medias ± error estándar
+plot_ph_lineas_W_I <- ggplot(ph_inicial_W, 
+                             aes(x = TIME, y = pH, color = LAYER, group = LAYER)) +
   stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
   stat_summary(fun = mean, geom = "point", size = 2.5) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
   facet_wrap(~ SITE, labeller = label_both) +
   scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
   labs(
-    title = "Evolución del pH a través del Tiempo (Tratamiento W)",
+    title = "Evolución del pH - Etapa Inicial (I) - Tratamiento W",
     subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro)",
     x = "Tiempo",
     y = "pH",
@@ -232,20 +172,11 @@ plot_ph_tiempo_W <- ggplot(ph_tratamiento_W,
     strip.background = element_rect(fill = "#f0f0f0")
   )
 
-# Mostrar el gráfico en pantalla
-print(plot_ph_tiempo_W)
+print(plot_ph_lineas_W_I)
 
-# Opcional: Guardar el gráfico en archivo de imagen
-# ggsave("cambios_pH_tiempo_W.png", plot = plot_ph_tiempo_W, width = 7, height = 5, dpi = 300)
-
-########   AHORA EL GRAFICO DE PUNTOS #####
-# Filtrar datos únicamente para el Tratamiento W
-ph_tratamiento_W <- ph_clean %>% 
-  filter(TREATMENT == "W" & !is.na(pH))
-
-# Gráfico de puntos dispersos (todas las mediciones reales)
-plot_ph_puntos_W <- ggplot(ph_tratamiento_W, 
-                           aes(x = TIME, y = pH, color = LAYER)) +
+# Gráfico 2: Puntos de mediciones individuales
+plot_ph_puntos_W_I <- ggplot(ph_inicial_W, 
+                             aes(x = TIME, y = pH, color = LAYER)) +
   geom_point(
     position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
     size = 2.5, 
@@ -254,7 +185,7 @@ plot_ph_puntos_W <- ggplot(ph_tratamiento_W,
   facet_wrap(~ SITE, labeller = label_both) +
   scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
   labs(
-    title = "Todas las Medidas de pH por Tiempo (Tratamiento W)",
+    title = "Todas las Medidas de pH por Tiempo - Etapa Inicial (I) - Tratamiento W",
     subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro)",
     x = "Tiempo",
     y = "pH",
@@ -269,28 +200,21 @@ plot_ph_puntos_W <- ggplot(ph_tratamiento_W,
     strip.background = element_rect(fill = "#f0f0f0")
   )
 
-# Mostrar el gráfico en pantalla
-print(plot_ph_puntos_W)
-
-# Opcional: Guardar el gráfico
-# ggsave("todas_medidas_pH_W.png", plot = plot_ph_puntos_W, width = 7, height = 5, dpi = 300)
+print(plot_ph_puntos_W_I)
 
 
+### ============================================================================
+### 4. ETAPA FINAL (STAGE == 'F')
+### ============================================================================
 
-
-
-### ----------------------------------------------------------------------------
-###  PARTE II: ANÁLISIS DE LA ETAPA FINAL (STAGE == 'F')
-### ----------------------------------------------------------------------------
-cat("\n=========================================================\n")
-cat("              ETAPA FINAL (STAGE = 'F')                  \n")
-cat("=========================================================\n\n")
-
-# A. Filtrar objeto final
+# --- 4.1 Filtrado de datos ---
 ph_final <- ph_clean %>%
   filter(STAGE == "F" & !is.na(pH))
 
-# B. Normalidad (Shapiro-Wilk) - Etapa Final
+ph_final_W <- ph_final %>% 
+  filter(TREATMENT == "W")
+
+# --- 4.2 Análisis Estadístico: Normalidad (Shapiro-Wilk) ---
 shapiro_final <- ph_final %>%
   group_by(SITE, LAYER, TREATMENT, TIME) %>%
   summarise(
@@ -301,19 +225,19 @@ shapiro_final <- ph_final %>%
   ) %>%
   mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
 
-cat("--- Shapiro-Wilk Por Subgrupo (STAGE = 'F') ---\n")
+cat("\n--- Shapiro-Wilk Por Subgrupo (STAGE = 'F') ---\n")
 print(as.data.frame(shapiro_final))
 
-# C. Homocedasticidad (Levene) por Capa - Etapa Final
+# --- 4.3 Homocedasticidad (Levene) por Capa ---
 cat("\n--- Prueba de Levene (STAGE = 'F') ---\n")
 levene_OL_fin <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "OL"))
 levene_PW_fin <- leveneTest(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "PW"))
 
 cat("Agua Sobrenadante (OL) - p-value:", levene_OL_fin$`Pr(>F)`[1], "\n")
-cat("Agua de Poro (PW)       - p-value:", levene_PW_fin$`Pr(>F)`[1], "\n\n")
+cat("Agua de Poro (PW)        - p-value:", levene_PW_fin$`Pr(>F)`[1], "\n")
 
-# D. Modelos ANOVA y Post-Hoc Completos - Etapa Final
-cat(">>> OL (Modelo Completo) - Final <<<\n")
+# --- 4.4 Modelos ANOVA y Post-Hoc Completos ---
+cat("\n>>> OL (Modelo Completo) - Final <<<\n")
 mod_OL_fin <- aov(pH ~ SITE * TREATMENT * TIME, data = filter(ph_final, LAYER == "OL"))
 print(summary(mod_OL_fin))
 
@@ -328,3 +252,60 @@ print(summary(mod_PW_fin))
 cat("\n--- Tukey en PW - Final ---\n")
 tukey_PW_fin <- emmeans(mod_PW_fin, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
 print(tukey_PW_fin$contrasts)
+
+# --- 4.5 Visualización de Tratamiento W (Etapa Final 'F') ---
+cat("\n--- Generando Gráficos: Etapa Final (STAGE F - W) ---\n")
+
+# Gráfico 1: Líneas de medias ± error estándar
+plot_ph_lineas_W_F <- ggplot(ph_final_W, 
+                             aes(x = TIME, y = pH, color = LAYER, group = LAYER)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  facet_wrap(~ SITE, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Evolución del pH - Etapa Final (F) - Tratamiento W",
+    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro)",
+    x = "Tiempo",
+    y = "pH",
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_ph_lineas_W_F)
+
+# Gráfico 2: Puntos de mediciones individuales
+plot_ph_puntos_W_F <- ggplot(ph_final_W, 
+                             aes(x = TIME, y = pH, color = LAYER)) +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
+    size = 2.5, 
+    alpha = 0.8
+  ) +
+  facet_wrap(~ SITE, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Todas las Medidas de pH por Tiempo - Etapa Final (F) - Tratamiento W",
+    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro)",
+    x = "Tiempo",
+    y = "pH",
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_ph_puntos_W_F)
