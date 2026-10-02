@@ -1,0 +1,316 @@
+
+### ============================================================================
+### 1. CARGA DE LIBRERÍAS Y PREPARACIÓN DE DATOS (CO2) - CORREGIDO
+### ============================================================================
+
+library(dplyr)
+library(tidyr)
+library(car)
+library(emmeans)
+library(ggplot2)
+
+# Cargar el archivo CSV configurando separador por coma y decimal por punto
+co2_data <- read.csv("CO2_0110.csv", header = TRUE, sep = ",", dec = ".", check.names = FALSE)
+
+# Normalizar nombres de columnas a minúsculas
+names(co2_data) <- tolower(names(co2_data))
+
+# Limpieza y extracción de variables
+co2_clean <- co2_data %>%
+  select(
+    time = matches("time"), 
+    sample, 
+    co2_corrected_ppm = matches("co2_corrected_ppm")
+  ) %>%
+  mutate(
+    # Convertir a numérico (reemplazando #VALUE! o cadenas vacías por NA)
+    CO2 = as.numeric(gsub(",", ".", as.character(co2_corrected_ppm))),
+    STAGE = as.factor(sub("^T\\d+([IF]).*", "\\1", sample)),
+    SITE = as.factor(ifelse(
+      grepl("-[A-Za-z]{2}\\d", sample),
+      sub(".*-([A-Za-z])[A-Za-z]\\d.*", "\\1", sample),
+      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
+    )),
+    TREATMENT = as.factor(ifelse(
+      grepl("-[A-Za-z]{2}\\d", sample),
+      sub(".*-[A-Za-z]([A-Za-z])\\d.*", "\\1", sample),
+      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
+    )),
+    # Extracción de LAYER: si el archivo original tiene columna 'layer' o si está en 'sample'
+    LAYER = as.factor(if("layer" %in% names(co2_data)) toupper(co2_data$layer) else ifelse(
+      grepl("-OL-", sample, ignore.case = TRUE), "OL",
+      ifelse(grepl("-PW-", sample, ignore.case = TRUE), "PW", "OL")
+    )),
+    TIME = as.factor(time)
+  ) %>%
+  filter(!is.na(CO2))
+
+### ============================================================================
+### 2. VISIÓN GENERAL: TODOS LOS DATOS (GLOBAL)
+### ============================================================================
+
+cat("\n--- Generando Gráfico Global 1: Evolución del CO2 (Líneas) ---\n")
+
+plot_co2_lineas_global <- ggplot(co2_clean, 
+                                aes(x = TIME, y = CO2, color = LAYER, group = LAYER)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Evolución General del CO2 a través del Tiempo",
+    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro) por Sitio y Tratamiento",
+    x = "Tiempo",
+    y = expression(paste(CO[2], " Corregido (ppm)")),
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_co2_lineas_global)
+
+cat("\n--- Generando Gráfico Global 2: Medidas Individuales de CO2 (Puntos) ---\n")
+
+plot_co2_puntos_global <- ggplot(co2_clean, 
+                                aes(x = TIME, y = CO2, color = LAYER)) +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
+    size = 2.5, 
+    alpha = 0.8
+  ) +
+  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Todas las Medidas de CO2 por Tiempo (Todos los Datos)",
+    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro) por Sitio y Tratamiento",
+    x = "Tiempo",
+    y = expression(paste(CO[2], " Corregido (ppm)")),
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_co2_puntos_global)
+
+### ============================================================================
+### 3. ETAPA INICIAL (STAGE == 'I')
+### ============================================================================
+
+# --- 3.1 Filtrado de datos ---
+co2_inicial <- co2_clean %>%
+  filter(STAGE == "I")
+
+co2_inicial_W <- co2_inicial %>% 
+  filter(TREATMENT == "W")
+
+# --- 3.2 Normalidad (Shapiro-Wilk) ---
+shapiro_inicial <- co2_inicial %>%
+  group_by(SITE, LAYER, TREATMENT, TIME) %>%
+  summarise(
+    n = n(),
+    W = ifelse(n >= 3, shapiro.test(CO2)$statistic, NA),
+    p_value = ifelse(n >= 3, shapiro.test(CO2)$p.value, NA),
+    .groups = "drop"
+  ) %>%
+  mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
+
+cat("\n--- Shapiro-Wilk Por Subgrupo (STAGE = 'I') ---\n")
+print(as.data.frame(shapiro_inicial))
+
+# --- 3.3 Homocedasticidad (Levene) ---
+cat("\n--- Prueba de Levene (STAGE = 'I') ---\n")
+levene_OL_ini <- leveneTest(CO2 ~ SITE * TREATMENT * TIME, data = filter(co2_inicial, LAYER == "OL"))
+levene_PW_ini <- leveneTest(CO2 ~ SITE * TREATMENT * TIME, data = filter(co2_inicial, LAYER == "PW"))
+
+cat("Agua Sobrenadante (OL) - p-value:", levene_OL_ini$`Pr(>F)`[1], "\n")
+cat("Agua de Poro (PW)         - p-value:", levene_PW_ini$`Pr(>F)`[1], "\n")
+
+# --- 3.4 Modelos ANOVA y Tukey (Tratamiento W) ---
+cat("\n>>> OL (Tratamiento W) - Inicial <<<\n")
+mod_OL_W_ini <- aov(CO2 ~ SITE * TIME, data = filter(co2_inicial_W, LAYER == "OL"))
+print(summary(mod_OL_W_ini))
+
+cat("\n--- Tukey (TIME) en OL (W) - Inicial ---\n")
+tukey_OL_W_ini <- emmeans(mod_OL_W_ini, pairwise ~ TIME, adjust = "tukey")
+print(tukey_OL_W_ini$contrasts)
+
+cat("\n>>> PW (Tratamiento W) - Inicial <<<\n")
+mod_PW_W_ini <- aov(CO2 ~ SITE * TIME, data = filter(co2_inicial_W, LAYER == "PW"))
+print(summary(mod_PW_W_ini))
+
+cat("\n--- Tukey (TIME) en PW (W) - Inicial ---\n")
+tukey_PW_W_ini <- emmeans(mod_PW_W_ini, pairwise ~ TIME, adjust = "tukey")
+print(tukey_PW_W_ini$contrasts)
+
+# --- 3.5 Visualización de Tratamiento W (Etapa Inicial 'I') ---
+cat("\n--- Generando Gráficos: Etapa Inicial (STAGE I - W) ---\n")
+
+plot_co2_lineas_W_I <- ggplot(co2_inicial_W, 
+                              aes(x = TIME, y = CO2, color = LAYER, group = LAYER)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  facet_wrap(~ SITE, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Evolución del CO2 - Etapa Inicial (I) - Tratamiento W",
+    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro)",
+    x = "Tiempo",
+    y = expression(paste(CO[2], " Corregido (ppm)")),
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_co2_lineas_W_I)
+
+plot_co2_puntos_W_I <- ggplot(co2_inicial_W, 
+                              aes(x = TIME, y = CO2, color = LAYER)) +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
+    size = 2.5, 
+    alpha = 0.8
+  ) +
+  facet_wrap(~ SITE, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Todas las Medidas de CO2 por Tiempo - Etapa Inicial (I) - Tratamiento W",
+    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro)",
+    x = "Tiempo",
+    y = expression(paste(CO[2], " Corregido (ppm)")),
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_co2_puntos_W_I)
+
+### ============================================================================
+### 4. ETAPA FINAL (STAGE == 'F')
+### ============================================================================
+
+# --- 4.1 Filtrado de datos ---
+co2_final <- co2_clean %>%
+  filter(STAGE == "F")
+
+co2_final_W <- co2_final %>% 
+  filter(TREATMENT == "W")
+
+# --- 4.2 Normalidad (Shapiro-Wilk) ---
+shapiro_final <- co2_final %>%
+  group_by(SITE, LAYER, TREATMENT, TIME) %>%
+  summarise(
+    n = n(),
+    W = ifelse(n >= 3, shapiro.test(CO2)$statistic, NA),
+    p_value = ifelse(n >= 3, shapiro.test(CO2)$p.value, NA),
+    .groups = "drop"
+  ) %>%
+  mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
+
+cat("\n--- Shapiro-Wilk Por Subgrupo (STAGE = 'F') ---\n")
+print(as.data.frame(shapiro_final))
+
+# --- 4.3 Homocedasticidad (Levene) ---
+cat("\n--- Prueba de Levene (STAGE = 'F') ---\n")
+levene_OL_fin <- leveneTest(CO2 ~ SITE * TREATMENT * TIME, data = filter(co2_final, LAYER == "OL"))
+levene_PW_fin <- leveneTest(CO2 ~ SITE * TREATMENT * TIME, data = filter(co2_final, LAYER == "PW"))
+
+cat("Agua Sobrenadante (OL) - p-value:", levene_OL_fin$`Pr(>F)`[1], "\n")
+cat("Agua de Poro (PW)         - p-value:", levene_PW_fin$`Pr(>F)`[1], "\n")
+
+# --- 4.4 Modelos ANOVA y Tukey ---
+cat("\n>>> OL (Modelo Completo) - Final <<<\n")
+mod_OL_fin <- aov(CO2 ~ SITE * TREATMENT * TIME, data = filter(co2_final, LAYER == "OL"))
+print(summary(mod_OL_fin))
+
+cat("\n--- Tukey en OL - Final ---\n")
+tukey_OL_fin <- emmeans(mod_OL_fin, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
+print(tukey_OL_fin$contrasts)
+
+cat("\n>>> PW (Modelo Completo) - Final <<<\n")
+mod_PW_fin <- aov(CO2 ~ SITE * TREATMENT * TIME, data = filter(co2_final, LAYER == "PW"))
+print(summary(mod_PW_fin))
+
+cat("\n--- Tukey en PW - Final ---\n")
+tukey_PW_fin <- emmeans(mod_PW_fin, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
+print(tukey_PW_fin$contrasts)
+
+# --- 4.5 Visualización de Tratamiento W (Etapa Final 'F') ---
+cat("\n--- Generando Gráficos: Etapa Final (STAGE F - W) ---\n")
+
+plot_co2_lineas_W_F <- ggplot(co2_final_W, 
+                              aes(x = TIME, y = CO2, color = LAYER, group = LAYER)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  facet_wrap(~ SITE, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Evolución del CO2 - Etapa Final (F) - Tratamiento W",
+    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro)",
+    x = "Tiempo",
+    y = expression(paste(CO[2], " Corregido (ppm)")),
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_co2_lineas_W_F)
+
+plot_co2_puntos_W_F <- ggplot(co2_final_W, 
+                              aes(x = TIME, y = CO2, color = LAYER)) +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
+    size = 2.5, 
+    alpha = 0.8
+  ) +
+  facet_wrap(~ SITE, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Todas las Medidas de CO2 por Tiempo - Etapa Final (F) - Tratamiento W",
+    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro)",
+    x = "Tiempo",
+    y = expression(paste(CO[2], " Corregido (ppm)")),
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_co2_puntos_W_F)
