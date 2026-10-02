@@ -309,3 +309,123 @@ plot_ph_puntos_W_F <- ggplot(ph_final_W,
   )
 
 print(plot_ph_puntos_W_F)
+
+### ============================================================================
+### 5. DIFERENCIA DE pH ENTRE ETAPA FINAL E INICIAL (ΔpH = Final - Inicial)
+### ============================================================================
+
+# --- 5.1 Cálculo de la diferencia (ΔpH) por réplica ---
+ph_diff <- ph_clean %>%
+  filter(!is.na(pH)) %>%
+  group_by(SITE, TREATMENT, TIME, LAYER, STAGE) %>%
+  mutate(rep = row_number()) %>%  # Asigna un número de réplica dentro de cada subgrupo
+  ungroup() %>%
+  pivot_wider(
+    id_cols = c(SITE, TREATMENT, TIME, LAYER, rep),
+    names_from = STAGE,
+    values_from = pH
+  ) %>%
+  mutate(delta_pH = F - I) %>%
+  filter(!is.na(delta_pH))
+
+# Filtrado específico para el Tratamiento W
+ph_diff_W <- ph_diff %>% 
+  filter(TREATMENT == "W")
+
+# --- 5.2 Análisis Estadístico: Normalidad (Shapiro-Wilk) para ΔpH ---
+shapiro_diff <- ph_diff %>%
+  group_by(SITE, LAYER, TREATMENT, TIME) %>%
+  summarise(
+    n = n(),
+    W = ifelse(n >= 3, shapiro.test(delta_pH)$statistic, NA),
+    p_value = ifelse(n >= 3, shapiro.test(delta_pH)$p.value, NA),
+    .groups = "drop"
+  ) %>%
+  mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
+
+cat("\n--- Shapiro-Wilk Por Subgrupo para ΔpH (Final - Inicial) ---\n")
+print(as.data.frame(shapiro_diff))
+
+# --- 5.3 Homocedasticidad (Levene) por Capa para ΔpH ---
+cat("\n--- Prueba de Levene para ΔpH ---\n")
+levene_OL_diff <- leveneTest(delta_pH ~ SITE * TREATMENT * TIME, data = filter(ph_diff, LAYER == "OL"))
+levene_PW_diff <- leveneTest(delta_pH ~ SITE * TREATMENT * TIME, data = filter(ph_diff, LAYER == "PW"))
+
+cat("Agua Sobrenadante (OL) - p-value:", levene_OL_diff$`Pr(>F)`[1], "\n")
+cat("Agua de Poro (PW)        - p-value:", levene_PW_diff$`Pr(>F)`[1], "\n")
+
+# --- 5.4 Modelos ANOVA y Post-Hoc en ΔpH (Tratamiento W) ---
+cat("\n>>> OL (Tratamiento W) - ΔpH (Final - Inicial) <<<\n")
+mod_OL_W_diff <- aov(delta_pH ~ SITE * TIME, data = filter(ph_diff_W, LAYER == "OL"))
+print(summary(mod_OL_W_diff))
+
+cat("\n--- Tukey (TIME) en OL (W) - ΔpH ---\n")
+tukey_OL_W_diff <- emmeans(mod_OL_W_diff, pairwise ~ TIME, adjust = "tukey")
+print(tukey_OL_W_diff$contrasts)
+
+cat("\n>>> PW (Tratamiento W) - ΔpH (Final - Inicial) <<<\n")
+mod_PW_W_diff <- aov(delta_pH ~ SITE * TIME, data = filter(ph_diff_W, LAYER == "PW"))
+print(summary(mod_PW_W_diff))
+
+cat("\n--- Tukey (TIME) en PW (W) - ΔpH ---\n")
+tukey_PW_W_diff <- emmeans(mod_PW_W_diff, pairwise ~ TIME, adjust = "tukey")
+print(tukey_PW_W_diff$contrasts)
+
+# --- 5.5 Visualización de ΔpH (Tratamiento W) ---
+cat("\n--- Generando Gráficos: ΔpH (STAGE F - STAGE I) - Tratamiento W ---\n")
+
+# Gráfico 1: Líneas de medias ± error estándar de ΔpH
+plot_delta_lineas_W <- ggplot(ph_diff_W, 
+                              aes(x = TIME, y = delta_pH, color = LAYER, group = LAYER)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  facet_wrap(~ SITE, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Cambio en el pH (ΔpH = Final - Inicial) - Tratamiento W",
+    subtitle = "Diferencia entre Etapa Final e Inicial para OL (Agua Sobrenadante) y PW (Agua de Poro)",
+    x = "Tiempo",
+    y = "ΔpH (Final - Inicial)",
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_delta_lineas_W)
+
+# Gráfico 2: Puntos de mediciones individuales de ΔpH
+plot_delta_puntos_W <- ggplot(ph_diff_W, 
+                              aes(x = TIME, y = delta_pH, color = LAYER)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
+    size = 2.5, 
+    alpha = 0.8
+  ) +
+  facet_wrap(~ SITE, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Medidas Individuales de ΔpH - Tratamiento W",
+    subtitle = "Diferencias individuales (Final - Inicial) entre OL (Agua Sobrenadante) y PW (Agua de Poro)",
+    x = "Tiempo",
+    y = "ΔpH (Final - Inicial)",
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_delta_puntos_W)
