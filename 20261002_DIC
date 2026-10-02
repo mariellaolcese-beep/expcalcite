@@ -1,0 +1,180 @@
+library(dplyr)
+library(tidyr)
+library(car)
+library(emmeans)
+library(ggplot2)
+
+# 1. Cargar datos
+dic_data <- read.csv("DIC_R.csv", header = TRUE, sep = ";", dec = ",", check.names = FALSE)
+
+# 2. Procesamiento
+dic_diff <- dic_data %>%
+  select(time, sample, layer, `DIC mM`) %>%
+  mutate(
+    DIC = as.numeric(gsub(",", ".", as.character(`DIC mM`))),
+    STAGE = as.factor(sub("^T\\d+([IF]).*", "\\1", sample)),
+    SITE = as.factor(ifelse(
+      grepl("-[A-Za-z]{2}\\d", sample),
+      sub(".*-([A-Za-z])[A-Za-z]\\d.*", "\\1", sample),
+      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
+    )),
+    TREATMENT = as.factor(ifelse(
+      grepl("-[A-Za-z]{2}\\d", sample),
+      sub(".*-[A-Za-z]([A-Za-z])\\d.*", "\\1", sample),
+      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
+    )),
+    TIME  = as.factor(time),
+    LAYER = as.factor(toupper(layer))
+  ) %>%
+  filter(!is.na(DIC)) %>%
+  group_by(SITE, TREATMENT, TIME, LAYER, STAGE) %>%
+  mutate(rep = row_number()) %>%
+  ungroup() %>%
+  pivot_wider(
+    id_cols = c(SITE, TREATMENT, TIME, LAYER, rep),
+    names_from = STAGE,
+    values_from = DIC
+  ) %>%
+  mutate(delta_DIC = F - I) %>%
+  filter(!is.na(delta_DIC))
+
+# 3. Shapiro-Wilk
+shapiro_delta <- dic_diff %>%
+  group_by(SITE, TREATMENT, LAYER, TIME) %>%
+  summarise(
+    n = n(),
+    W = ifelse(n >= 3, shapiro.test(delta_DIC)$statistic, NA),
+    p_value = ifelse(n >= 3, shapiro.test(delta_DIC)$p.value, NA),
+    .groups = "drop"
+  ) %>%
+  mutate(Normal_p05 = ifelse(p_value > 0.05, "SÍ", "NO"))
+
+print(as.data.frame(shapiro_delta))
+
+### ============================================================================
+### 1. PRUEBA DE HOMOCEDASTICIDAD DE LEVENE (IGUALDAD DE VARIANZAS)
+### ============================================================================
+
+cat("\n====================================================================\n")
+cat("PRUEBA DE HOMOCEDASTICIDAD DE LEVENE (ΔDIC)\n")
+cat("====================================================================\n")
+
+levene_OL <- leveneTest(delta_DIC ~ SITE * TREATMENT * TIME, data = filter(dic_diff, LAYER == "OL"))
+levene_PW <- leveneTest(delta_DIC ~ SITE * TREATMENT * TIME, data = filter(dic_diff, LAYER == "PW"))
+
+cat("Capa OL (Agua Sobrenadante) - p-value:", levene_OL$`Pr(>F)`[1], "\n")
+cat("Capa PW (Agua de Poro)      - p-value:", levene_PW$`Pr(>F)`[1], "\n")
+
+
+### ============================================================================
+### 2. TABLA DE ESTADÍSTICOS DESCRIPTIVOS Y RESUMEN
+### ============================================================================
+
+cat("\n====================================================================\n")
+cat("ESTADÍSTICOS RESUMEN DE ΔDIC (FINAL - INICIAL)\n")
+cat("====================================================================\n")
+
+estadisticos_delta <- dic_diff %>%
+  group_by(SITE, TREATMENT, LAYER, TIME) %>%
+  summarise(
+    n = n(),
+    Media_delta = mean(delta_DIC, na.rm = TRUE),
+    SD_delta    = sd(delta_DIC, na.rm = TRUE),
+    SE_delta    = SD_delta / sqrt(n),
+    Mediana     = median(delta_DIC, na.rm = TRUE),
+    Min         = min(delta_DIC, na.rm = TRUE),
+    Max         = max(delta_DIC, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(as.data.frame(estadisticos_delta))
+
+
+### ============================================================================
+### 3. MODELOS ANOVA Y PRUEBAS POST-HOC DE TUKEY
+### ============================================================================
+
+# --- 3.1 Capa OL ---
+cat("\n====================================================================\n")
+cat("ANOVA Y TUKEY - CAPA OL (AGUA SOBRENADANTE)\n")
+cat("====================================================================\n")
+
+mod_OL_delta <- aov(delta_DIC ~ SITE * TREATMENT * TIME, data = filter(dic_diff, LAYER == "OL"))
+print(summary(mod_OL_delta))
+
+cat("\n--- Pruebas Post-Hoc Tukey para Capa OL ---\n")
+tukey_OL_delta <- emmeans(mod_OL_delta, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
+print(tukey_OL_delta$contrasts)
+
+
+# --- 3.2 Capa PW ---
+cat("\n====================================================================\n")
+cat("ANOVA Y TUKEY - CAPA PW (AGUA DE PORO)\n")
+cat("====================================================================\n")
+
+mod_PW_delta <- aov(delta_DIC ~ SITE * TREATMENT * TIME, data = filter(dic_diff, LAYER == "PW"))
+print(summary(mod_PW_delta))
+
+cat("\n--- Pruebas Post-Hoc Tukey para Capa PW ---\n")
+tukey_PW_delta <- emmeans(mod_PW_delta, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
+print(tukey_PW_delta$contrasts)
+
+
+### ============================================================================
+### 4. GENERACIÓN DE GRÁFICOS
+### ============================================================================
+
+# --- 4.1 Gráfico de Líneas (Media ± Error Estándar) ---
+plot_delta_lineas <- ggplot(dic_diff, 
+                           aes(x = TIME, y = delta_DIC, color = LAYER, group = LAYER)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.8) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Cambio Neto en DIC (ΔDIC = Final - Inicial) - Tendencia Promedio",
+    subtitle = "Media ± Error Estándar (Línea en 0 = Sin Cambio)",
+    x = "Tiempo",
+    y = "ΔDIC (mM)",
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_delta_lineas)
+
+
+# --- 4.2 Gráfico de Puntos (Valores Individuales) ---
+plot_delta_puntos <- ggplot(dic_diff, 
+                           aes(x = TIME, y = delta_DIC, color = LAYER)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.8) +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.5),
+    size = 2.5, 
+    alpha = 0.85
+  ) +
+  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  labs(
+    title = "Distribución de Datos Individuales de ΔDIC (Final - Inicial)",
+    subtitle = "Cada punto representa la variación observada en una réplica",
+    x = "Tiempo",
+    y = "ΔDIC (mM)",
+    color = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_delta_puntos)
