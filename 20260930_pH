@@ -50,9 +50,8 @@ plot_ph_lineas_global <- ggplot(ph_clean %>% filter(!is.na(pH)),
   facet_grid(SITE ~ TREATMENT, labeller = labeller(SITE = site_labels, TREATMENT = treatment_labels)) +
   scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
   labs(
-    title = "pH vs Time",
-    subtitle = "Comparison between OL and PW by Site and Treatment",
-    x = "Time",
+    title = "Temporal evolution of pH",
+    x = "Time (days)",
     y = "pH",
     color = "Layer"
   ) +
@@ -80,9 +79,8 @@ plot_ph_puntos_global <- ggplot(ph_clean %>% filter(!is.na(pH)),
   facet_grid(SITE ~ TREATMENT, labeller = labeller(SITE = site_labels, TREATMENT = treatment_labels)) +
   scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
   labs(
-    title = "All pH Measurements by Time (All Data)",
-    subtitle = "Individual measurements of OL (Overlying Water) vs PW (Pore Water) by Site and Treatment",
-    x = "Time",
+    title = "Temporal evolution of pH",
+    x = "Time (days)",
     y = "pH",
     color = "Layer (LAYER)"
   ) +
