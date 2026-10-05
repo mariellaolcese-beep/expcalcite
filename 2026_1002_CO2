@@ -1,6 +1,6 @@
 
 ### ============================================================================
-### 1. CARGA DE LIBRERÍAS Y PREPARACIÓN DE DATOS (CO2) - CORREGIDO
+### 1. CARGA DE LIBRERÍAS Y PREPARACIÓN DE DATOS (CO2 - HEADSPACE)
 ### ============================================================================
 
 library(dplyr)
@@ -9,102 +9,238 @@ library(car)
 library(emmeans)
 library(ggplot2)
 
-# Cargar el archivo CSV configurando separador por coma y decimal por punto
-co2_data <- read.csv("CO2_0110.csv", header = TRUE, sep = ",", dec = ".", check.names = FALSE)
+# Cargar archivo CSV
+co2_data <- read.csv(
+  "CO2_0110.csv",
+  header = TRUE,
+  sep = ",",
+  dec = ".",
+  check.names = FALSE
+)
 
 # Normalizar nombres de columnas a minúsculas
 names(co2_data) <- tolower(names(co2_data))
 
-# Limpieza y extracción de variables
+# Preparar datos
 co2_clean <- co2_data %>%
   select(
-    time = matches("time"), 
-    sample, 
+    time = matches("time"),
+    sample,
     co2_corrected_ppm = matches("co2_corrected_ppm")
   ) %>%
   mutate(
-    # Convertir a numérico (reemplazando #VALUE! o cadenas vacías por NA)
-    CO2 = as.numeric(gsub(",", ".", as.character(co2_corrected_ppm))),
-    STAGE = as.factor(sub("^T\\d+([IF]).*", "\\1", sample)),
-    SITE = as.factor(ifelse(
+    
+    # --------------------------------------------------------------------------
+    # CO2
+    # --------------------------------------------------------------------------
+    # Convertir CO2 a numérico
+    CO2 = as.numeric(
+      gsub(",", ".", as.character(co2_corrected_ppm))
+    ),
+    
+    # --------------------------------------------------------------------------
+    # STAGE
+    # --------------------------------------------------------------------------
+    # Extraer I/F de los nombres de muestra
+    STAGE = as.factor(
+      sub("^T\\d+([IF]).*", "\\1", sample)
+    ),
+    
+    # --------------------------------------------------------------------------
+    # SITE
+    # --------------------------------------------------------------------------
+    # Extraer A/B
+    SITE = ifelse(
       grepl("-[A-Za-z]{2}\\d", sample),
       sub(".*-([A-Za-z])[A-Za-z]\\d.*", "\\1", sample),
       sub(".*-([A-Za-z])\\d.*", "\\1", sample)
-    )),
-    TREATMENT = as.factor(ifelse(
+    ),
+    
+    # Recodificar:
+    # A = Low OM
+    # B = High OM
+    SITE = factor(
+      SITE,
+      levels = c("A", "B"),
+      labels = c("Low OM", "High OM")
+    ),
+    
+    # --------------------------------------------------------------------------
+    # TREATMENT
+    # --------------------------------------------------------------------------
+    # Extraer D/W
+    TREATMENT = ifelse(
       grepl("-[A-Za-z]{2}\\d", sample),
       sub(".*-[A-Za-z]([A-Za-z])\\d.*", "\\1", sample),
       sub(".*-([A-Za-z])\\d.*", "\\1", sample)
-    )),
-    # Extracción de LAYER: si el archivo original tiene columna 'layer' o si está en 'sample'
-    LAYER = as.factor(if("layer" %in% names(co2_data)) toupper(co2_data$layer) else ifelse(
-      grepl("-OL-", sample, ignore.case = TRUE), "OL",
-      ifelse(grepl("-PW-", sample, ignore.case = TRUE), "PW", "OL")
-    )),
+    ),
+    
+    # Recodificar:
+    # D = Dry
+    # W = Wet
+    TREATMENT = factor(
+      TREATMENT,
+      levels = c("D", "W"),
+      labels = c("Dry", "Wet")
+    ),
+    
+    # --------------------------------------------------------------------------
+    # TIME
+    # --------------------------------------------------------------------------
     TIME = as.factor(time)
+    
   ) %>%
   filter(!is.na(CO2))
 
+
 ### ============================================================================
-### 2. VISIÓN GENERAL: TODOS LOS DATOS (GLOBAL)
+### 2. COMPROBACIÓN RÁPIDA DE LOS GRUPOS
 ### ============================================================================
 
-cat("\n--- Generando Gráfico Global 1: Evolución del CO2 (Líneas) ---\n")
+cat("\n--- Grupos encontrados ---\n")
 
-plot_co2_lineas_global <- ggplot(co2_clean, 
-                                aes(x = TIME, y = CO2, color = LAYER, group = LAYER)) +
-  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
-  stat_summary(fun = mean, geom = "point", size = 2.5) +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
-  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
-  labs(
-    title = " CO2 vs Time",
-    subtitle = "ppm",
-    x = "Time",
-    y = expression(paste(CO[2], " Corregido (ppm)")),
-    color = "LAYER"
+print(
+  table(
+    co2_clean$SITE,
+    co2_clean$TREATMENT,
+    useNA = "ifany"
+  )
+)
+
+
+### ============================================================================
+### 3. GRÁFICO 1: EVOLUCIÓN DEL CO2 (MEDIAS ± SE)
+### ============================================================================
+
+cat("\n--- Generando Gráfico 1: Evolución del CO2 ---\n")
+
+plot_co2_lineas_global <- ggplot(
+  co2_clean,
+  aes(
+    x = TIME,
+    y = CO2,
+    group = 1
+  )
+) +
+  
+  # Media
+  stat_summary(
+    fun = mean,
+    geom = "line",
+    linewidth = 0.9
   ) +
+  
+  # Puntos de la media
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    size = 2.5
+  ) +
+  
+  # Error estándar
+  stat_summary(
+    fun.data = mean_se,
+    geom = "errorbar",
+    width = 0.2
+  ) +
+  
+  # Facetas: OM × tratamiento
+  facet_grid(
+    SITE ~ TREATMENT
+  ) +
+  
+  labs(
+    title = "CO₂ concentration over time",
+    subtitle = "Headspace (HS)",
+    x = "Time",
+    y = expression(paste(CO[2], " (ppm)"))
+  ) +
+  
   theme_bw() +
+  
   theme(
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
+    plot.title = element_text(
+      face = "bold",
+      size = 14,
+      hjust = 0.5
+    ),
+    plot.subtitle = element_text(
+      size = 11,
+      hjust = 0.5
+    ),
+    axis.title = element_text(
+      face = "bold"
+    ),
+    strip.background = element_rect(
+      fill = "#f0f0f0"
+    ),
+    strip.text = element_text(
+      face = "bold"
+    )
   )
 
 print(plot_co2_lineas_global)
 
-cat("\n--- Generando Gráfico Global 2: Medidas Individuales de CO2 (Puntos) ---\n")
 
-plot_co2_puntos_global <- ggplot(co2_clean, 
-                                aes(x = TIME, y = CO2, color = LAYER)) +
+### ============================================================================
+### 4. GRÁFICO 2: DATOS INDIVIDUALES
+### ============================================================================
+
+cat("\n--- Generando Gráfico 2: Medidas individuales de CO2 ---\n")
+
+plot_co2_puntos_global <- ggplot(
+  co2_clean,
+  aes(
+    x = TIME,
+    y = CO2
+  )
+) +
+  
   geom_point(
-    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
-    size = 2.5, 
+    position = position_jitter(
+      width = 0.15,
+      height = 0
+    ),
+    size = 2.5,
     alpha = 0.8
   ) +
-  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
-  labs(
-    title = "CO2 vs Time (All data)",
-    subtitle = "ppm (HS)",
-    x = "Time",
-    y = expression(paste(CO[2], " Corregido (ppm)")),
-    color = "LAYER"
+  
+  # Facetas: OM × tratamiento
+  facet_grid(
+    SITE ~ TREATMENT
   ) +
+  
+  labs(
+    title = "CO₂ concentration over time",
+    subtitle = "Individual measurements — Headspace (HS)",
+    x = "Time",
+    y = expression(paste(CO[2], " (ppm)"))
+  ) +
+  
   theme_bw() +
+  
   theme(
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
+    plot.title = element_text(
+      face = "bold",
+      size = 14,
+      hjust = 0.5
+    ),
+    plot.subtitle = element_text(
+      size = 11,
+      hjust = 0.5
+    ),
+    axis.title = element_text(
+      face = "bold"
+    ),
+    strip.background = element_rect(
+      fill = "#f0f0f0"
+    ),
+    strip.text = element_text(
+      face = "bold"
+    )
   )
 
 print(plot_co2_puntos_global)
-
 ### ============================================================================
 ### 3. ETAPA INICIAL (STAGE == 'I')
 ### ============================================================================
