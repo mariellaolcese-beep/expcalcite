@@ -308,3 +308,138 @@ plot_dic_puntos_W_F <- ggplot(dic_final_W,
   )
 
 print(plot_dic_puntos_W_F)
+
+### ============================================================================
+### 1. CARGA DE LIBRERÍAS Y PREPARACIÓN DE DATOS (DIC & DELTA DIC)
+### ============================================================================
+
+library(dplyr)
+library(tidyr)
+library(car)
+library(emmeans)
+library(ggplot2)
+
+# Cargar el archivo CSV
+dic_data <- read.csv("DIC_R.csv", header = TRUE, sep = ";", dec = ",", check.names = FALSE)
+
+# Limpieza y extracción de variables
+dic_clean <- dic_data %>%
+  select(time, sample, layer, `DIC mM`) %>%
+  mutate(
+    DIC = as.numeric(gsub(",", ".", as.character(`DIC mM`))),
+    STAGE = as.factor(sub("^T\\d+([IF]).*", "\\1", sample)),
+    # Extracción del sitio
+    SITE_raw = ifelse(
+      grepl("-[A-Za-z]{2}\\d", sample),
+      sub(".*-([A-Za-z])[A-Za-z]\\d.*", "\\1", sample),
+      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
+    ),
+    # CORRECCIÓN: Reemplazar 'D' por 'A' según lo solicitado
+    SITE = as.factor(ifelse(SITE_raw == "D", "A", SITE_raw)),
+    
+    TREATMENT = as.factor(ifelse(
+      grepl("-[A-Za-z]{2}\\d", sample),
+      sub(".*-[A-Za-z]([A-Za-z])\\d.*", "\\1", sample),
+      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
+    )),
+    TIME  = as.factor(time),
+    LAYER = as.factor(toupper(layer))
+  ) %>%
+  filter(!is.na(DIC))
+
+# --- CÁLCULO DE DELTA DIC ---
+dic_delta <- dic_clean %>%
+  group_by(SITE, TREATMENT, LAYER, STAGE) %>%
+  mutate(
+    DIC_T0 = mean(DIC[TIME == 0 | TIME == "0" | TIME == "T0"], na.rm = TRUE),
+    DELTA_DIC = DIC - DIC_T0
+  ) %>%
+  ungroup()
+
+
+### ============================================================================
+### 2. VISIÓN GENERAL: DIC GLOBAL (LÍNEAS Y PUNTOS)
+### ============================================================================
+
+cat("\n--- Generando Gráfico Global 1: Evolución del DIC (Líneas) ---\n")
+
+plot_dic_lineas_global <- ggplot(dic_clean, 
+                                aes(x = TIME, y = DIC, color = LAYER, shape = LAYER, linetype = LAYER, group = LAYER)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, color = "black") +
+  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
+  scale_shape_manual(values = c("OL" = 16, "PW" = 17)) +
+  scale_linetype_manual(values = c("OL" = "solid", "PW" = "dashed")) +
+  labs(
+    title = "Evolución General del DIC a través del Tiempo (Sitio D corregido a A)",
+    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro) por Sitio y Tratamiento",
+    x = "Tiempo",
+    y = "DIC (mM)",
+    color = "Capa (LAYER)",
+    shape = "Capa (LAYER)",
+    linetype = "Capa (LAYER)"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_dic_lineas_global)
+
+
+### ============================================================================
+### 3. VISIÓN GENERAL: DELTA DIC GLOBAL
+### ============================================================================
+
+cat("\n--- Generando Gráfico Global Delta DIC (Líneas) ---\n")
+
+
+### ============================================================================
+### 4. EJEMPLO DE ANÁLISIS ESTADÍSTICO (ETAPA INICIAL - W)
+### ============================================================================
+
+dic_inicial_W <- dic_clean %>%
+  filter(STAGE == "I" & TREATMENT == "W")
+
+cat("\n>>> OL (Tratamiento W) - Inicial (Con Sitio D recodificado a A) <<<\n")
+mod_OL_W_ini <- aov(DIC ~ SITE * TIME, data = filter(dic_inicial_W, LAYER == "OL"))
+print(summary(mod_OL_W_ini))
+
+cat("\n--- Tukey (TIME) en OL (W) - Inicial ---\n")
+tukey_OL_W_ini <- emmeans(mod_OL_W_ini, pairwise ~ TIME, adjust = "tukey")
+print(tukey_OL_W_ini$contrasts)
+
+plot_delta_lineas_global <- ggplot(dic_delta, 
+                                   aes(x = TIME, y = DELTA_DIC, color = LAYER, shape = LAYER, linetype = LAYER, group = LAYER)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, color = "black") +
+  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
+  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
+  scale_shape_manual(values = c("OL" = 16, "PW" = 17)) +
+  scale_linetype_manual(values = c("OL" = "solid", "PW" = "dashed")) +
+  labs(
+    title = "Delta DIC ",
+    x = "Time",
+    y = "Delta DIC (mM)",
+    color = "LAYER",
+    shape = "LAYER",
+    linetype = "LAYER"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    plot.subtitle = element_text(size = 10, hjust = 0.5),
+    axis.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "#f0f0f0")
+  )
+
+print(plot_delta_lineas_global)
+
