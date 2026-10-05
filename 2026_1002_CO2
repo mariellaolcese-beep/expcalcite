@@ -59,11 +59,11 @@ plot_co2_lineas_global <- ggplot(co2_clean,
   facet_grid(SITE ~ TREATMENT, labeller = label_both) +
   scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
   labs(
-    title = "Evolución General del CO2 a través del Tiempo",
-    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro) por Sitio y Tratamiento",
-    x = "Tiempo",
+    title = " CO2 vs Time",
+    subtitle = "ppm",
+    x = "Time",
     y = expression(paste(CO[2], " Corregido (ppm)")),
-    color = "Capa (LAYER)"
+    color = "LAYER"
   ) +
   theme_bw() +
   theme(
@@ -88,11 +88,11 @@ plot_co2_puntos_global <- ggplot(co2_clean,
   facet_grid(SITE ~ TREATMENT, labeller = label_both) +
   scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
   labs(
-    title = "Todas las Medidas de CO2 por Tiempo (Todos los Datos)",
-    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro) por Sitio y Tratamiento",
-    x = "Tiempo",
+    title = "CO2 vs Time (All data)",
+    subtitle = "ppm (HS)",
+    x = "Time",
     y = expression(paste(CO[2], " Corregido (ppm)")),
-    color = "Capa (LAYER)"
+    color = "LAYER"
   ) +
   theme_bw() +
   theme(
