@@ -1,5 +1,5 @@
 ### ============================================================================
-### 1. CARGA DE LIBRERÍAS Y PREPARACIÓN DE DATOS
+### 1. LIBRARY LOADING & DATA PREPARATION
 ### ============================================================================
 
 library(dplyr)
@@ -8,10 +8,11 @@ library(car)
 library(emmeans)
 library(ggplot2)
 
-# Cargar el archivo ph_data.csv
+# Load ph_data.csv
+# Assuming ph_data.csv exists in the working directory.
 ph_data <- read.csv("ph_data.csv", header = TRUE, sep = ",")
 
-# Limpieza y estructuración general del dataset completo
+# Clean and structure general data
 ph_clean <- ph_data %>%
   rename(
     SITE = site..A.B.,
@@ -31,27 +32,29 @@ ph_clean <- ph_data %>%
     TIME = as.factor(TIME)
   )
 
+site_labels <- c(A = "High OM", B = "Low OM")
+treatment_labels <- c(D = "Dry", W = "Wet")
 
 ### ============================================================================
-### 2. VISIÓN GENERAL: TODOS LOS DATOS (GLOBAL)
+### 2. GENERAL OVERVIEW: ALL DATA (GLOBAL)
 ### ============================================================================
 
-# --- 2.1 Gráfico 1: Líneas de pH (Media ± Error Estándar - Todos los datos) ---
-cat("\n--- Generando Gráfico Global 1: Evolución del pH (Líneas) ---\n")
+# --- 2.1 Graph 1: pH Evolution over Time (Line) ---
+cat("\n--- Generating Global Graph 1: pH Evolution (Line) ---\n")
 
 plot_ph_lineas_global <- ggplot(ph_clean %>% filter(!is.na(pH)), 
                                 aes(x = TIME, y = pH, color = LAYER, group = LAYER)) +
   stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
   stat_summary(fun = mean, geom = "point", size = 2.5) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
-  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  facet_grid(SITE ~ TREATMENT, labeller = labeller(SITE = site_labels, TREATMENT = treatment_labels)) +
+  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
   labs(
-    title = "Evolución General del pH a través del Tiempo",
-    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro) por Sitio y Tratamiento",
-    x = "Tiempo",
+    title = "pH vs Time",
+    subtitle = "Comparison between OL and PW by Site and Treatment",
+    x = "Time",
     y = "pH",
-    color = "Capa (LAYER)"
+    color = "Layer"
   ) +
   theme_bw() +
   theme(
@@ -64,8 +67,8 @@ plot_ph_lineas_global <- ggplot(ph_clean %>% filter(!is.na(pH)),
 
 print(plot_ph_lineas_global)
 
-# --- 2.2 Gráfico 2: Puntos de mediciones individuales (Todos los datos) ---
-cat("\n--- Generando Gráfico Global 2: Medidas Individuales de pH (Puntos) ---\n")
+# --- 2.2 Graph 2: Individual pH Measurements (Points) ---
+cat("\n--- Generating Global Graph 2: Individual pH Measurements (Points) ---\n")
 
 plot_ph_puntos_global <- ggplot(ph_clean %>% filter(!is.na(pH)), 
                                 aes(x = TIME, y = pH, color = LAYER)) +
@@ -74,14 +77,14 @@ plot_ph_puntos_global <- ggplot(ph_clean %>% filter(!is.na(pH)),
     size = 2.5, 
     alpha = 0.8
   ) +
-  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  facet_grid(SITE ~ TREATMENT, labeller = labeller(SITE = site_labels, TREATMENT = treatment_labels)) +
+  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
   labs(
-    title = "Todas las Medidas de pH por Tiempo (Todos los Datos)",
-    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro) por Sitio y Tratamiento",
-    x = "Tiempo",
+    title = "All pH Measurements by Time (All Data)",
+    subtitle = "Individual measurements of OL (Overlying Water) vs PW (Pore Water) by Site and Treatment",
+    x = "Time",
     y = "pH",
-    color = "Capa (LAYER)"
+    color = "Layer (LAYER)"
   ) +
   theme_bw() +
   theme(
