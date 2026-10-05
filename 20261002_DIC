@@ -40,15 +40,15 @@ dic_clean <- dic_data %>%
 cat("\n--- Generando Gráfico Global 1: Evolución del DIC (Líneas) ---\n")
 
 plot_dic_lineas_global <- ggplot(dic_clean, 
-                                aes(x = TIME, y = DIC, color = LAYER, group = LAYER)) +
+                                 aes(x = TIME, y = DIC, color = LAYER, group = LAYER)) +
   stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
   stat_summary(fun = mean, geom = "point", size = 2.5) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
   facet_grid(SITE ~ TREATMENT, labeller = label_both) +
   scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
   labs(
-    title = "Evolución General del DIC a través del Tiempo",
-    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro) por Sitio y Tratamiento",
+    title = "DIC vs Time",
+    subtitle = "Comparison OL y PW for Site y Treatment",
     x = "Tiempo",
     y = "DIC (mM)",
     color = "Capa (LAYER)"
@@ -67,7 +67,7 @@ print(plot_dic_lineas_global)
 cat("\n--- Generando Gráfico Global 2: Medidas Individuales de DIC (Puntos) ---\n")
 
 plot_dic_puntos_global <- ggplot(dic_clean, 
-                                aes(x = TIME, y = DIC, color = LAYER)) +
+                                 aes(x = TIME, y = DIC, color = LAYER)) +
   geom_point(
     position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
     size = 2.5, 
@@ -153,14 +153,14 @@ plot_dic_lineas_W_I <- ggplot(dic_inicial_W,
   stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
   stat_summary(fun = mean, geom = "point", size = 2.5) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
-  facet_wrap(~ SITE, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+  facet_wrap(~ SITE, labeller = labeller(SITE = site_labels)) +
+  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
   labs(
-    title = "Evolución del DIC - Etapa Inicial (I) - Tratamiento W",
-    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro)",
-    x = "Tiempo",
+    title = "DIC vs time (I)  (W-treatment)",
+    subtitle = "Comparison between OL y PW ",
+    x = "Time",
     y = "DIC (mM)",
-    color = "Capa (LAYER)"
+    color = "LAYER"
   ) +
   theme_bw() +
   theme(
@@ -181,14 +181,14 @@ plot_dic_puntos_W_I <- ggplot(dic_inicial_W,
     size = 2.5, 
     alpha = 0.8
   ) +
-  facet_wrap(~ SITE, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
+facet_wrap(~ SITE, labeller = labeller(SITE = site_labels)) +
+  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
   labs(
-    title = "Todas las Medidas de DIC por Tiempo - Etapa Inicial (I) - Tratamiento W",
-    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro)",
-    x = "Tiempo",
+    title = "DIC vs Time (I) - (W-treatment)",
+    subtitle = "Measures of OL vs PW",
+    x = "Time",
     y = "DIC (mM)",
-    color = "Capa (LAYER)"
+    color = "LAYER"
   ) +
   theme_bw() +
   theme(
@@ -227,7 +227,7 @@ shapiro_final <- dic_final %>%
 cat("\n--- Shapiro-Wilk Por Subgrupo (STAGE = 'F') ---\n")
 print(as.data.frame(shapiro_final))
 
-# --- 4.3 Homocedasticidad (Levene) por Capa ---
+ 4.3 Homocedasticidad (Levene) por Capa ---
 cat("\n--- Prueba de Levene (STAGE = 'F') ---\n")
 levene_OL_fin <- leveneTest(DIC ~ SITE * TREATMENT * TIME, data = filter(dic_final, LAYER == "OL"))
 levene_PW_fin <- leveneTest(DIC ~ SITE * TREATMENT * TIME, data = filter(dic_final, LAYER == "PW"))
@@ -261,7 +261,7 @@ plot_dic_lineas_W_F <- ggplot(dic_final_W,
   stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
   stat_summary(fun = mean, geom = "point", size = 2.5) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
-  facet_wrap(~ SITE, labeller = label_both) +
+  facet_wrap(~ SITE, labeller = labeller(SITE = site_labels)) +
   scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
   labs(
     title = "Evolución del DIC - Etapa Final (F) - Tratamiento W",
@@ -364,7 +364,7 @@ dic_delta <- dic_clean %>%
 cat("\n--- Generando Gráfico Global 1: Evolución del DIC (Líneas) ---\n")
 
 plot_dic_lineas_global <- ggplot(dic_clean, 
-                                aes(x = TIME, y = DIC, color = LAYER, shape = LAYER, linetype = LAYER, group = LAYER)) +
+                                 aes(x = TIME, y = DIC, color = LAYER, shape = LAYER, linetype = LAYER, group = LAYER)) +
   stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
   stat_summary(fun = mean, geom = "point", size = 2.5) +
   stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, color = "black") +
@@ -442,4 +442,3 @@ plot_delta_lineas_global <- ggplot(dic_delta,
   )
 
 print(plot_delta_lineas_global)
-
