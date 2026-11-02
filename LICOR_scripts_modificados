@@ -1,0 +1,452 @@
+#Map injections rawdata
+
+#Description: This script creates a map_injection csv file for every rawdata file. These are stored in the Map_injections folder and will be manually edited to correct label text, adapt time of labels or add labels that were not written in the rawdata at the time of collection. 
+
+#Rules for labels (remarks during acquisition):
+#1. Each label identifies an injection sequence (same sample, same volume)
+#2. Each label must be unique for a given day of analysis (preferable if they are unique across days as well)
+#3. The underscore symbol (i.e. "_" ) is reserved to separate the sample identity from the volume injected (in ml). We cannot include the underscore for any other purpose.
+#4. The injection volume must be present at the end of the label, in mL and separated from the sample identity with an underscore.
+#5. You will be able to correct remarks used during acquisition after running this script
+
+# Examples: "S4-CA-A1-5f_0.1 " sample S4-CA-A1-5f injected with 0.1 ml 
+
+#This script uses the first and last appearance of each unique remark throughout the raw-data file, this may lead to errors if remarks were re-used (i.e. same text in remark at different moments of the day).It produces a map_injection file for every rawdata file that does not have it already. 
+
+#Each raw_"GHG"_map_injection file will be composed of: 
+#'date': date of analysis automatically filled
+#'Tstart': time of first appearance of each unique remark
+#'Tend': time of last appearance of each unique remark
+#'label': text recorded as remark during acquisition
+#'rawfile': rawfile name corresponding to the map_injection file
+#'Tstart_correct': actual start to consider for integration of peaks (default NA), must be filled manually after running this script
+#'Tend_correct': actual end to consider for integration of peaks (default NA), must be filled manually running this script
+#'label_correct': actual label to assign to each sample (default NA), must be filled manually after running this script
+#'firstliccor_TG10_or_TG20': upstream instrument during acquisition (default NA), must be filled manually after running this script. Used to set integration window widths for each instrument.  
+
+
+#Clean Global environment
+rm(list=ls())
+
+# ---- Directories ----
+#To test the repository functionality (with example data):
+project_root<- "C:/Calibration_1mL_y_0.5_mL_Licor_20261029"
+
+#TO PROCESS YOUR OWN DATA, uncomment the following line and edit with the full path to your own your project folder (no closing "/"), eg:  
+
+# project_root<- "C:/Calibration_1mL_y_0.5_mL_Licor_20261029"
+
+
+#Data folders
+folder_raw <- paste0(project_root,"/Rawdata") #contains unedited files downloaded from licor
+
+#Folder for Map Injection files: 
+#Where csv files with the injection details will be saved. 
+folder_mapinjections<- paste0(project_root,"/Map_injections")
+if (!dir.exists(folder_mapinjections)) {
+  # If it doesn't exist, create the folder
+  dir.create(folder_mapinjections)
+}
+
+# ---- Packages & functions ----
+#Installs (if needed) and loads required packages:
+required_pkgs <- c("tidyverse")
+
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+
+#Import functions of repo 
+repo_root <- dirname((rstudioapi::getSourceEditorContext()$path))
+files.sources = list.files(path = paste0(repo_root,"/functions"), full.names = T)
+for (f in files.sources){source(f)}
+
+
+#Check rawdata files and map_injection files
+
+#raw_files are named as: paste("TG20-01377-", year-month-day, "-T",hourstartexport, ".data")
+#maps_done will be named as raw_map_injection_rawfile.csv, the rawfile part will not end in .data
+
+#List maps that are already created in folder_mapinjections
+maps_done<- list.files(path=folder_mapinjections, pattern = "^raw_.*_map_injection")
+
+#List raw files (for Li-7820 and Li-7810) present in folder_raw
+raw_files<- list.files(path = folder_raw, pattern =  "^TG")
+
+#Get raw files without corresponding map injection
+raw_files_withoutmap<- raw_files[!gsub(".data", "",raw_files)%in%gsub(".csv", "", gsub(pattern = "raw_.*_map_injection_","",maps_done))]
+
+
+#Collect Tstart Tend and labels for all unique remarks of every raw_file_withoutmap
+#Save these details in csv files named "raw_[gas]_map_injection_[rawfilename without ".data"].csv" 
+for (i in raw_files_withoutmap){
+  #Here we check if the raw file is for CO2 and CH4 or for N2O
+  if (grepl("TG10", i)) {
+    a<- read_Licor_TG10(paste0(folder_raw,"/",i))
+    gas <- "CO2_and_CH4"
+  }
+  if (grepl("TG20", i)) {
+    a<- read_Licor_TG20(paste0(folder_raw,"/",i))
+    gas <- "N2O"
+  }
+  a <- a %>% 
+    group_by(label) %>% 
+    summarise(date=first(date),Tstart=first(UTCtime), Tend =last(UTCtime)) %>% 
+    arrange(Tstart) %>% 
+    mutate(rawfile=i) %>% 
+    select(date, Tstart, Tend, label, rawfile) %>% 
+    mutate(Tstart_correct=NA,	Tend_correct=NA,	label_correct=NA, firstlicor_TG10_or_TG20=NA)#Add empty columns to manually correct the data
+  
+  write.csv(a,file = paste0(folder_mapinjections,"/raw_", gas, "_map_injection_", gsub(".data","",i), ".csv"),row.names = F)
+}
+
+#Clear WP again
+rm(list=ls())
+
+#Peaks to ppm 
+
+
+#Description: this script uses integrated_injections files produced in the "Raw_to_peaks_..." script and calculates ppm for each peak based on the calibration factor, volume injected and baseline concentration measured (for each peak). It outputs ppm data for each integrated peak.
+
+#Calibration factor used here was obtained following the one-point calibration procedure described in the Licor-application note. Calibration factor should be obtained for each Li-COR instrument, and standards should be treated in the exact same way as samples during injection to minimize biases. Check the structure of the One-point_calibration_factor.csv included in the "calibration" folder to see how you must create your own. 
+
+#Clean Global environment
+rm(list=ls())
+
+
+# ---- Directories ----
+#To test the repository functionality (with example data):
+# project_root<- paste0(dirname(rstudioapi::getSourceEditorContext()$path),"/EXAMPLE_PROJECT")
+
+#TO PROCESS YOUR OWN DATA, uncomment the following line and edit with the full path to your own your project folder (no closing "/"), eg:  
+
+project_root<- "C:/CALIBRATION_1mL20261029_IRGA"
+
+#Data folders
+folder_results<- paste0(project_root,"/Results_ppm")
+
+#Here is the repository calibration folder, from which we get the calibration file:
+repo_root <- dirname(rstudioapi::getSourceEditorContext()$path)
+
+
+#Packages & functions ----
+#Installs (if needed) and loads required packages:
+required_pkgs <- c("tidyverse",
+                   "readxl",
+                   "lubridate",
+                   "stringr",
+                   "ggpmisc")
+
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+
+#Load repository functions
+files.sources = list.files(path = paste0(repo_root,"/functions"), full.names = T)
+for (f in files.sources){source(f)}
+
+
+# ---- Calculate ppm--------
+#Get extracted data
+integratedfiles<- list.files(path = folder_results, pattern = "^integrated_injections_")
+ppmfiles<- list.files(path = folder_results, pattern = "^.*ppm_samples_")
+
+#Select integratedfiles without ppm data
+integratedtoppm<- gsub(".csv","",gsub("integrated_injections_","",integratedfiles[
+  !gsub(".csv","",gsub("integrated_injections_","",integratedfiles))%in%gsub(".csv","",gsub("^.*ppm_samples_","",ppmfiles))]))#  integrated files "rawcode" without corresponding ppmfiles "rawcode"
+
+
+
+for (i in integratedtoppm){
+  #Take the correct calibration curve for the gas
+  gasname <- tolower(substr(i, 1, 3))
+  
+  # Calibration factor
+  factor = 1
+  
+  #Load integrated peaks of integratedfile i
+  int<- read.csv(paste0(folder_results,"/","integrated_injections_",i,".csv"))
+  
+  
+  peak_ppm<- int %>% 
+    separate(peak_id, into = c("sample", "ml_injected","peak_no"), sep = "_",remove = F) %>% 
+    mutate(ml_injected=as.numeric(gsub("[^0-9.]", "", ml_injected)),
+           gas=gasname,
+           peak_baseppm=peak_base/1000,
+           peak_baseppm=if_else(peak_baseppm<0,0,peak_baseppm), #We only keep baseline value if it is positive (negative baselines are a machine-error and should not be kept for ppm calculation)
+           ppm= (peaksum/(factor*ml_injected))+peak_baseppm) %>% 
+    select(dayofanalysis, gas, sample, ml_injected, peak_id, ppm, peaksum, peak_baseppm, unixtime_ofmax) %>% 
+    mutate(datetime=as.POSIXct(unixtime_ofmax))
+  
+  #Save ppm of peaks
+  write.csv(peak_ppm, file = paste0(folder_results, "/","ppm_samples_",i,".csv"), row.names = F)
+  
+}
+
+#Peaks to ppm 
+
+
+#Description: this script uses integrated_injections files produced in the "Raw_to_peaks_..." script and calculates ppm for each peak based on the calibration factor, volume injected and baseline concentration measured (for each peak). It outputs ppm data for each integrated peak.
+
+#Calibration factor used here was obtained following the one-point calibration procedure described in the Licor-application note. Calibration factor should be obtained for each Li-COR instrument, and standards should be treated in the exact same way as samples during injection to minimize biases. Check the structure of the One-point_calibration_factor.csv included in the "calibration" folder to see how you must create your own. 
+
+#Clean Global environment
+rm(list=ls())
+
+
+
+# ---- Directories ----
+#To test the repository functionality (with example data):
+project_root<- "C:/Calibration_1mL_y_0.5_mL_Licor_20261029"
+
+#TO PROCESS YOUR OWN DATA, uncomment the following line and edit with the full path to your own your project folder (no closing "/"), eg:  
+
+# project_root<- "C:/Users/User1/Documents/Licor-injections"
+
+
+#Data folders
+folder_results<- paste0(project_root,"/Results_ppm")
+
+#Here is the repository calibration folder, from which we get the calibration file:
+repo_root <- dirname(rstudioapi::getSourceEditorContext()$path)
+folder_calibration <- paste0(repo_root,"/calibration")
+
+
+#Packages & functions ----
+#Installs (if needed) and loads required packages:
+required_pkgs <- c("tidyverse",
+                   "readxl",
+                   "lubridate",
+                   "stringr",
+                   "ggpmisc")
+
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+
+#Load repository functions
+files.sources = list.files(path = paste0(repo_root,"/functions"), full.names = T)
+for (f in files.sources){source(f)}
+
+
+# ---- Calculate ppm--------
+#Get extracted data
+integratedfiles<- list.files(path = folder_results, pattern = "^integrated_injections_")
+ppmfiles<- list.files(path = folder_results, pattern = "^.*ppm_samples_")
+
+#Select integratedfiles without ppm data
+integratedtoppm<- gsub(".csv","",gsub("integrated_injections_","",integratedfiles[
+  !gsub(".csv","",gsub("integrated_injections_","",integratedfiles))%in%gsub(".csv","",gsub("^.*ppm_samples_","",ppmfiles))]))#  integrated files "rawcode" without corresponding ppmfiles "rawcode"
+  
+
+
+#Get 1-point calibration factor (based on repeated standard injections of standardbottle during 3 weeks of analysis, sampled from exetainers treated in the same way as the samples. This has been tested to be more accurate than the calibration curves produced from tedlar bags and stored as Calibration_and_limit_of_detection_2024-12-12.csv)
+calibration<- read_csv(paste0(folder_calibration, "/One-point_calibration_factor.csv"),show_col_types = F)
+
+for (i in integratedtoppm){
+  #Take the correct calibration curve for the gas
+  gasname <- tolower(substr(i, 1, 3))
+
+  factor <- calibration %>% filter(gas == gasname) %>% select(factor) %>% pull()
+  
+  #Load integrated peaks of integratedfile i
+  int<- read.csv(paste0(folder_results,"/","integrated_injections_",i,".csv"))
+
+    
+    peak_ppm<- int %>% 
+      separate(peak_id, into = c("sample", "ml_injected","peak_no"), sep = "_",remove = F) %>% 
+      mutate(ml_injected=as.numeric(gsub("[^0-9.]", "", ml_injected)),
+             gas=gasname,
+             peak_baseppm=peak_base/1000,
+             peak_baseppm=if_else(peak_baseppm<0,0,peak_baseppm), #We only keep baseline value if it is positive (negative baselines are a machine-error and should not be kept for ppm calculation)
+             ppm= (peaksum/(factor*ml_injected))+peak_baseppm) %>% 
+      select(dayofanalysis, gas, sample, ml_injected, peak_id, ppm, peaksum, peak_baseppm, unixtime_ofmax) %>% 
+      mutate(datetime=as.POSIXct(unixtime_ofmax))
+
+  #Save ppm of peaks
+  write.csv(peak_ppm, file = paste0(folder_results, "/","ppm_samples_",i,".csv"), row.names = F)
+
+}
+
+
+#Summary of all N2O, CO2 and CH4 concentrations (ppm)
+
+#This script loads all Licor-derived concentrations in Results_ppm folder and automatically produces 3 files:
+
+#FILE All_Summary_ch4_co2_n2o_allinjections.csv: Contains average, sd and n for each gas without discarding any replicate injection.
+
+#FILE All_Summary_ch4_co2_n2o_best3inj: Contains average, sd and n for each gas Taking into account for each sample the best 3 injections (the ones that result in the lowest CV). If discarding samples does not reduce the CV, the value reported is that without discarding injections. The number of injections is always reported
+
+#FILE All_Injections_ppm_ch4_co2_n2o.csv: Contains the ppm calculated for every injection and every gas, keeping info of volume injected. 
+
+#avg_ppm_GHG: mean concentration (ppm)
+#sd_ppm_GHG: standard deviation (ppm)
+#n_used_GHG: number of injections used for mean and standard deviation
+#n_discarded_GHG: number of injections that were discarded (if any).
+
+
+#Clean Global environment
+rm(list=ls())
+
+
+# ---- Directories ----
+
+# To test the repository functionality (with example data):
+project_root <- "C:/Calibration_1mL_y_0.5_mL_Licor_20261029"
+folder_results <- paste0(project_root, "/Results_ppm/")
+
+# Packages & functions ----
+required_pkgs <- c("tidyverse", "readxl")
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+
+# --- 1. Import & format ----
+import_gas_data <- function(gas_pattern, folder) {
+  files <- list.files(folder, pattern = gas_pattern, recursive = TRUE, full.names = TRUE)
+  if (length(files) > 0) {
+    return(map_dfr(files, ~ read_csv(.x, show_col_types = FALSE)))
+  } else {
+    return(NULL)
+  }
+}
+
+n2o <- import_gas_data("^ppm_samples_N2O", folder_results)
+co2 <- import_gas_data("^ppm_samples_CO2", folder_results)
+ch4 <- import_gas_data("^ppm_samples_CH4", folder_results)
+
+all_list <- list(n2o, co2, ch4)
+all_list <- all_list[!sapply(all_list, is.null)]
+
+if (length(all_list) > 0) {
+  all <- bind_rows(all_list)
+} else {
+  stop("No se encontraron archivos de muestras ppm.")
+}
+
+# --- 2. Calculations ----
+select_lowest_cv <- function(measurements) {
+  combos <- combn(measurements, 3, simplify = FALSE)
+  cvs <- sapply(combos, function(x) sd(x) / mean(x) * 100)
+  best_combo <- combos[[which.min(cvs)]]
+  return(best_combo)
+}
+
+## Calculate summary with best 3 injections
+using3best <- all %>%
+  group_by(gas, sample, dayofanalysis) %>%
+  mutate(total_injections = sum(!is.na(ppm))) %>% 
+  filter(total_injections >= 3) %>% 
+  reframe(
+    ppm = select_lowest_cv(ppm)
+  ) %>% 
+  group_by(gas, sample, dayofanalysis) %>% 
+  summarise(avg3_ppm = mean(ppm),
+            sd3_ppm = sd(ppm), 
+            cv3 = sd3_ppm / avg3_ppm,
+            n3 = sum(!is.na(ppm)), .groups = "drop")
+
+## Calculate summary with all injections
+usingall <- all %>% 
+  group_by(gas, sample, dayofanalysis) %>% 
+  summarise(avg_ppm = mean(ppm),
+            sd_ppm = sd(ppm), 
+            cv = sd_ppm / avg_ppm,
+            nall = sum(!is.na(ppm)), .groups = "drop")
+
+# --- 3. Format and Save ----
+combination <- usingall %>% 
+  left_join(using3best, by = c("gas", "sample", "dayofanalysis")) %>% 
+  mutate(discarding = !is.na(cv3) & (cv > cv3)) %>% 
+  mutate(avg_ppm = if_else(discarding, avg3_ppm, avg_ppm),
+         sd_ppm  = if_else(discarding, sd3_ppm, sd_ppm),
+         n_used = if_else(discarding, n3, nall),
+         n_discarded = if_else(discarding, nall - n3, 0)) %>% 
+  select(gas, sample, dayofanalysis, avg_ppm, sd_ppm, n_used, n_discarded) %>% 
+  pivot_wider(id_cols = c(sample, dayofanalysis), names_from = gas, names_sep = "_", values_from = c(avg_ppm, sd_ppm, n_used, n_discarded), names_sort = TRUE)
+
+write.csv(combination, paste0(folder_results, "All_Summary_ch4_co2_n2o_best3inj.csv"), row.names = FALSE)
+
+# Save all data per injection
+allinjections <- all %>% 
+  select(gas, dayofanalysis, sample, ml_injected, peak_id, ppm)
+
+write.csv(allinjections, paste0(folder_results, "All_Injections_ppm_ch4_co2_n2o.csv"), row.names = FALSE)
+
+message("¡Proceso finalizado con éxito! Todos los resúmenes guardados en Results_ppm.")
+
+#Calculate water concentration from headspace measurements
+
+#Clean Global environment
+rm(list=ls())
+
+
+# ---- Directories ----
+
+#To test the repository functionality (with example data):
+project_root<- paste0(dirname(rstudioapi::getSourceEditorContext()$path),"/EXAMPLE_PROJECT")
+
+#TO PROCESS YOUR OWN DATA, uncomment the following line and edit with the full path to your own your project folder (no closing "/"), eg:  
+
+project_root<- "C:/Calibration_1mL_y_0.5_mL_Licor_20261029"
+
+
+  #Folders
+  folder_results<- paste0(project_root,"/Results_ppm")
+  folder_auxfiles<- paste0(project_root,"/Auxiliary_files")
+  
+  #Check if the folder exist and, if not, create one
+  if (!dir.exists(folder_auxfiles)) {
+    # If it doesn't exist, create the folder
+    dir.create(folder_auxfiles)
+  }
+
+  
+  
+  #Packages & functions ----
+  #Installs (if needed) and loads required packages:
+  required_pkgs <- c("tidyverse")
+  
+  for (pkg in required_pkgs) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      install.packages(pkg)
+    }
+    library(pkg, character.only = TRUE)
+  }
+  
+  
+
+#Import All_Injections_file data----
+  Allinjectionfile<- list.files(path = folder_results, pattern = "^All_Injections_ppm") #Find summary results with all injections
+  data <- read_csv(paste0(folder_results, "/", Allinjectionfile))
+  
+
+#Create empty auxiliary template file for all the All_injetions_ppm files----
+  #Create template for auxiliary data to calculate water concentration
+  auxtemplate <- data.frame(SampleID = unique(data$sample),
+                            Sample_type = NA,
+                            LinkID = NA,
+                            Temp = NA,
+                            Vol_air = NA,
+                            Vol_water = NA,
+                            Pressure = NA)
+  
+  auxtemplate <- auxtemplate %>% mutate(Sample_type = case_when(str_detect(SampleID, "6ppm|aire") ~ "Ignore"))
+  
+  #Save the template
+  write_csv(auxtemplate, paste0(folder_auxfiles, "/HeadSpace_auxiliary_template.csv"))
+  warning("Now you must edit the HeadSpace_auxiliary_template.csv file by adding the information necessary to calculate water concentration, and save it with the word \"filled\" added to the filename, as follows: HeadSpace_auxiliary_template_filled.csv")
+
+  
