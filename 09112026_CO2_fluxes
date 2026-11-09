@@ -1,39 +1,56 @@
 library(ggplot2)
 library(dplyr)
 library(tidyr)
+# library(readxl) # Descomentar si el archivo es .xlsx
 
 # 1. Configuración de directorio y carga de datos
 setwd("C:/Experimentcalcite/data")
-co2_data <- read.csv("co2_data.csv", fileEncoding = "UTF-8-BOM")
-names(co2_data) <- c("SAMPLE", "TIME", "SITE", "STAGE", "TREATMENT", "CO2_ppm")
+
+# Carga de la planilla (ajustar extensión a .csv o .xlsx según corresponda)
+co2_data <- read.csv("planilla_total.csv", fileEncoding = "UTF-8-BOM", check.names = FALSE)
+
 
 # Palette
 col_D <- "#B08968"  # Dry
 col_W <- "#4A7C82"  # Wet
 
-# Constantes físicas
+# Constantes físicas y geométricas
 R_gas <- 0.0820573           # L*atm/(mol*K)
 T_kelvin <- 298.15           # 25°C
 P_atm <- 1.0
-V_headspace_L <- 0.076       # 76 mL
-A_sedimento_m2 <- 0.00196    #DIAMETRO 50mm  r = 2.5 cm -> A = π*r² = 19.6 cm² = 0.00196 m²
+A_sedimento_m2 <- 0.00196    # r = 2.5 cm -> A = π*r² = 19.6 cm² = 0.00196 m²
 incubation_time_h <- 24
 
-# Función de conversión de ppm a flujo
-ppm_to_flux <- function(delta_ppm) {
-  delta_C_mol <- (delta_ppm * 1e-6) * (P_atm * V_headspace_L) / (R_gas * T_kelvin)
+# Función de conversión de ppm a flujo (acepta volumen dinámico en Litros)
+ppm_to_flux <- function(delta_ppm, v_headspace_l) {
+  delta_C_mol <- (delta_ppm * 1e-6) * (P_atm * v_headspace_l) / (R_gas * T_kelvin)
   return((delta_C_mol * 1e6) / (incubation_time_h * A_sedimento_m2))
 }
 
-# 2. Cálculo de flujos por muestra
+# 2. Cálculo de flujos por muestra con volumen individual de headspace
 co2_flux_samples <- co2_data %>%
-  mutate(REPLICATE_ID = gsub("(T\\d+)[IF](-.*)", "\\1\\2", SAMPLE)) %>%
-  select(REPLICATE_ID, TIME, SITE, TREATMENT, STAGE, CO2_ppm) %>%
-  pivot_wider(names_from = STAGE, values_from = CO2_ppm) %>%
-  rename(CO2_initial = `I`, CO2_final = `F`) %>%
+  # Renombrar columnas clave según la nueva planilla
+  rename(
+    STAGE        = stage,
+    TREATMENT    = treatment,
+    SITE         = site,
+    CO2_ppm      = CO2_corrected_ppm,
+    V_headspace  = Vol_headspace_mL,
+    REPLICATE_ID = sample_id  # O usas code_lab según tu identificador de réplica
+  ) %>%
+  # Agrupar por la réplica individual para emparejar Inicial (I) y Final (F)
+  group_by(REPLICATE_ID, SITE, TREATMENT) %>%
+  summarise(
+    TIME          = first(TIME), # Ajustar si la columna de tiempo tiene otro nombre (ej. time)
+    CO2_initial   = CO2_ppm[STAGE == "I" | STAGE == "Initial"][1],
+    CO2_final     = CO2_ppm[STAGE == "F" | STAGE == "Final"][1],
+    # Conversión del volumen específico de la muestra de mL a Litros
+    V_headspace_L = mean(V_headspace, na.rm = TRUE) / 1000,
+    .groups       = "drop"
+  ) %>%
   mutate(
-    delta_ppm = CO2_final - CO2_initial,
-    flux_umol_m2_h = ppm_to_flux(delta_ppm)
+    delta_ppm      = CO2_final - CO2_initial,
+    flux_umol_m2_h = ppm_to_flux(delta_ppm, V_headspace_L)
   )
 
 # 3. Resumen estadístico
@@ -53,9 +70,8 @@ co2_summary <- co2_flux_samples %>%
   ) %>%
   complete(site, time_factor = factor(etiquetas_tiempo_todas, levels = etiquetas_tiempo_todas), treatment)
 
-# 4. Construcción del gráfico (con ggplot inicial)
+# 4. Construcción del gráfico
 p_co2 <- ggplot() +
-  # Barras de flujos observados
   geom_col(
     data = co2_summary,
     aes(x = time_factor, y = mean_flux, fill = treatment, group = treatment),
@@ -64,7 +80,6 @@ p_co2 <- ggplot() +
     alpha = 0.9,
     na.rm = TRUE
   ) +
-  # Barras de error
   geom_errorbar(
     data = co2_summary,
     aes(x = time_factor, ymin = mean_flux - sd_flux, ymax = mean_flux + sd_flux, group = treatment),
@@ -98,5 +113,5 @@ p_co2 <- ggplot() +
     legend.position = "top"
   )
 
-# Mostrar gráfico
 print(p_co2)
+
