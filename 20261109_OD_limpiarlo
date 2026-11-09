@@ -1,0 +1,798 @@
+library(tidyverse)
+library(lubridate)
+
+# ==========================================
+# 1. LECTURA 
+# ==========================================
+
+ruta_archivo <- "C:/Experimentcalcite/data/SENSORS_OD.csv"
+
+# Leer archivo CSV
+od_raw <- read.csv2(ruta_archivo, stringsAsFactors = FALSE)
+
+# Explicar el nombre de las columnas y que lea las fechas:
+# 1: ID_sensor, 2: date, 3: treatment, 4: site, 5: replicate, 6: L_M_V, 7: OD_umolL
+colnames(od_raw) <- c("ID_sensor", "date", "treatment", "site", "replicate", "L_M_V", "OD_umolL")
+
+od <- od_raw %>%
+  mutate(
+    # Parsea fechas dinámicamente (D-M-Y o Y-M-D, con o sin hora)
+    date = parse_date_time(date, orders = c("dmy", "dmy HMS", "ymd", "ymd HMS")),
+    
+    # Conversión decimal a número
+    OD_umolL = as.numeric(gsub(",", ".", as.character(OD_umolL))),
+    
+    # Factores
+    treatment = factor(treatment),
+    site      = factor(site),
+    ID_sensor = factor(ID_sensor),
+    replicate = factor(replicate),
+    L_M_V     = factor(L_M_V, levels = c("L", "M", "V"))
+  )
+
+# ==========================================
+# 2. Que reconozca los dias: VERIFICAR L_M_V
+# ==========================================
+
+# Generar el día (Lunes = 1, Miércoles = 3, Viernes = 5)
+od <- od %>%
+  mutate(dia_real = case_when(
+    wday(date, week_start = 1) == 1 ~ "L",
+    wday(date, week_start = 1) == 3 ~ "M",
+    wday(date, week_start = 1) == 5 ~ "V",
+    TRUE ~ NA_character_
+  ))
+
+# Comprobar si existen discrepancias entre el día del calendario y L_M_V
+discrepancias <- od %>% 
+  filter(is.na(dia_real) | as.character(L_M_V) != dia_real) %>%
+  distinct(date, L_M_V, dia_real)
+
+print(discrepancias) # Si todo coincide, dará 0 filas
+
+
+# ==========================================
+# 3. SCREENING GRÁFICO (PASO A PASO)
+# ==========================================
+
+# A) General: Comparación Wet vs Dry
+ggplot(od, aes(x = date, y = OD_umolL, color = treatment, group = interaction(treatment, site, replicate))) +
+  geom_line(alpha = 0.5) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Screening General: Wet vs Dry",
+    x = "Fecha",
+    y = expression(OD~(mu*mol/L)),
+    color = "Tratamiento"
+  ) +
+  theme_minimal()
+
+# B) Específico Wet: Sitio A y Sitio B en el mismo gráfico
+od %>%
+  filter(tolower(treatment) %in% c("wet", "w")) %>%
+  ggplot(aes(x = date, y = OD_umolL, color = site, group = interaction(site, ID_sensor, replicate))) +
+  geom_line(alpha = 0.6) +
+  geom_point(alpha = 0.7) +
+  labs(
+    title = "Screening Tratamiento Wet: Comparación Sitio A vs Sitio B",
+    x = "Fecha",
+    y = expression(OD~(mu*mol/L)),
+    color = "Sitio"
+  ) +
+  theme_minimal()
+
+# c) Ahora que solo muestre los puntos promedios entre sitio 
+# Específico Wet: Una sola línea promedio por Sitio (A vs B)
+od %>%
+  filter(tolower(treatment) %in% c("wet", "w")) %>%
+  group_by(date, site) %>%
+  summarise(OD_umolL = mean(OD_umolL, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Screening Tratamiento Wet: Promedio Sitio A vs Sitio B",
+    x = "Fecha",
+    y = expression(Promedio~OD~(mu*mol/L)),
+    color = "Sitio"
+  ) +
+  theme_minimal()
+
+# Ahora con la desviacion estandar el específico Wet: Promedio y Desviación Estándar por Sitio (A vs B)
+od %>%
+  filter(tolower(treatment) %in% c("wet", "w")) %>%
+  group_by(date, site) %>%
+  summarise(
+    OD_media = mean(OD_umolL, na.rm = TRUE),
+    OD_sd    = sd(OD_umolL, na.rm = TRUE),
+    .groups  = "drop"
+  ) %>%
+  ggplot(aes(x = date, y = OD_media, color = site, fill = site, group = site)) +
+  
+  # Sombra que representa la Desviación Estándar (Promedio ± SD)
+  geom_ribbon(aes(ymin = OD_media - OD_sd, ymax = OD_media + OD_sd), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Screening Tratamiento Wet: Promedio y Desviación Estándar",
+    subtitle = "Líneas: Promedio | Sombra: ±1 Desviación Estándar",
+    x = "Fecha",
+    y = expression(Promedio~OD~(mu*mol/L)),
+    color = "Sitio",
+    fill  = "Sitio"
+  ) +
+  theme_minimal()
+
+# Definir las fechas a marcar
+fechas_clave <- as.Date(c("2026-08-31", "2026-09-25"))
+
+ACA OTRO ESTILO
+# ==========================================
+# GRÁFICO INDEPENDIENTE: WET (SITIO A vs SITIO B)
+# ==========================================
+
+p_wet_AB <- od %>%
+  # Filtra el tratamiento Wet (cubre 'Wet', 'W', etc.)
+  filter(tolower(as.character(treatment)) %in% c("wet", "w")) %>%
+  ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+  
+  # Puntos semitransparentes con mediciones individuales
+  geom_point(alpha = 0.3, position = position_jitter(width = 0.1, height = 0)) +
+  
+  # Línea que une los promedios por fecha
+  stat_summary(fun = mean, geom = "line", linewidth = 1.2) +
+  
+  # Puntos marcadores en el promedio
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  
+  labs(
+    title = "Tratamiento Wet: Comparación Sitio A vs Sitio B",
+    subtitle = "Líneas: Promedio por fecha | Puntos transparentes: Mediciones individuales",
+    x = "Fecha",
+    y = expression(OD~(mu*mol/L)),
+    color = "Sitio"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+
+# Desplegar en pantalla
+print(p_wet_AB)
+
+ahora con las fechas de fct_na_level_to_value(# Definir las fechas de referencia
+  fechas_clave <- as.Date(c("2026-08-31", "2026-09-25"))
+  
+  # Definir las fechas de referencia
+  fechas_clave <- as.Date(c("2026-08-31", "2026-09-25"))
+  
+  # Definir las fechas de referencia
+  fechas_clave <- as.Date(c("2026-08-31", "2026-09-25"))
+  
+  # ==========================================
+  # 1. GRÁFICO 1: MARCANDO LAS FECHAS (CON TODOS LOS DATOS)
+  # ==========================================
+  p_wet_AB_1 <- od %>%
+    filter(tolower(as.character(treatment)) %in% c("wet", "w")) %>%
+    ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+    
+    # Puntos individuales
+    geom_point(alpha = 0.3, position = position_jitter(width = 0.1, height = 0)) +
+    
+    # Línea y puntos del promedio por fecha
+    stat_summary(fun = mean, geom = "line", linewidth = 1.2) +
+    stat_summary(fun = mean, geom = "point", size = 2.5) +
+    
+    # Líneas de referencia verticales
+    geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+    
+    # Etiquetas de texto superiores
+    annotate(
+      "text", x = as.Date("2026-08-31"), y = Inf, 
+      label = " 31 Ago", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    annotate(
+      "text", x = as.Date("2026-09-25"), y = Inf, 
+      label = " 25 Sep", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    
+    labs(
+      title = "Tratamiento Wet: Comparación Sitio A vs Sitio B (Fechas Marcadas)",
+      subtitle = "Líneas rojas punteadas: 31 de Agosto y 25 de Septiembre",
+      x = "Fecha",
+      y = expression(OD~(mu*mol/L)),
+      color = "Sitio"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold", size = 14)
+    )
+  
+  print(p_wet_AB_1)
+  
+  # ==========================================
+  # 2. GRÁFICO 2: ELIMINANDO LOS PUNTOS DE ESAS FECHAS
+  # ==========================================
+  p_wet_AB_2 <- od %>%
+    filter(
+      tolower(as.character(treatment)) %in% c("wet", "w"),
+      !(as.Date(date) %in% fechas_clave) # Excluye las mediciones de 31-Ago y 25-Sep
+    ) %>%
+    ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+    
+    # Puntos individuales sin las fechas filtradas
+    geom_point(alpha = 0.3, position = position_jitter(width = 0.1, height = 0)) +
+    
+    # Línea y puntos del promedio recalculados sin esas fechas
+    stat_summary(fun = mean, geom = "line", linewidth = 1.2) +
+    stat_summary(fun = mean, geom = "point", size = 2.5) +
+    
+    # Líneas de referencia verticales donde estaban las fechas excluidas
+    geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+    
+    # Etiquetas superiores
+    annotate(
+      "text", x = as.Date("2026-08-31"), y = Inf, 
+      label = " 31 Ago (Excluido)", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    annotate(
+      "text", x = as.Date("2026-09-25"), y = Inf, 
+      label = " 25 Sep (Excluido)", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    
+    labs(
+      title = "Tratamiento Wet: Comparación Sitio A vs Sitio B (Sin Fechas de Fallo)",
+      subtitle = "Excluye mediciones de 31 Ago y 25 Sep (líneas punteadas muestran su posición)",
+      x = "Fecha",
+      y = expression(OD~(mu*mol/L)),
+      color = "Sitio"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold", size = 14)
+    )
+  
+  print(p_wet_AB_2)
+  
+  # ==========================================
+  # 1. GRÁFICO 1: MARCANDO LAS FECHAS (CON TODOS LOS DATOS)
+  # ==========================================
+  p_wet_AB_1 <- od %>%
+    filter(tolower(as.character(treatment)) %in% c("wet", "w")) %>%
+    ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+    
+    # Puntos individuales
+    geom_point(alpha = 0.3, position = position_jitter(width = 0.1, height = 0)) +
+    
+    # Línea y puntos del promedio por fecha
+    stat_summary(fun = mean, geom = "line", linewidth = 1.2) +
+    stat_summary(fun = mean, geom = "point", size = 2.5) +
+    
+    # Líneas de referencia verticales
+    geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+    
+    # Etiquetas de texto superiores
+    annotate(
+      "text", x = as.Date("2026-08-31"), y = Inf, 
+      label = " 31 Ago", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    annotate(
+      "text", x = as.Date("2026-09-25"), y = Inf, 
+      label = " 25 Sep", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    
+    labs(
+      title = "Tratamiento Wet: Comparación Sitio A vs Sitio B (Fechas Marcadas)",
+      subtitle = "Líneas rojas punteadas: 31 de Agosto y 25 de Septiembre",
+      x = "Fecha",
+      y = expression(OD~(mu*mol/L)),
+      color = "Sitio"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold", size = 14)
+    )
+  
+  print(p_wet_AB_1)
+  
+  # ==========================================
+  # 2. GRÁFICO 2: ELIMINANDO LOS PUNTOS DE ESAS FECHAS
+  # ==========================================
+  p_wet_AB_2 <- od %>%
+    filter(
+      tolower(as.character(treatment)) %in% c("wet", "w"),
+      !(as.Date(date) %in% fechas_clave) # Excluye las mediciones de 31-Ago y 25-Sep
+    ) %>%
+    ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+    
+    # Puntos individuales sin las fechas filtradas
+    geom_point(alpha = 0.3, position = position_jitter(width = 0.1, height = 0)) +
+    
+    # Línea y puntos del promedio recalculados sin esas fechas
+    stat_summary(fun = mean, geom = "line", linewidth = 1.2) +
+    stat_summary(fun = mean, geom = "point", size = 2.5) +
+    
+    # Líneas de referencia verticales donde estaban las fechas excluidas
+    geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+    
+    # Etiquetas superiores
+    annotate(
+      "text", x = as.Date("2026-08-31"), y = Inf, 
+      label = " 31 Ago (Excluido)", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    annotate(
+      "text", x = as.Date("2026-09-25"), y = Inf, 
+      label = " 25 Sep (Excluido)", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    
+    labs(
+      title = "Tratamiento Wet: Comparación Sitio A vs Sitio B (Sin Fechas de Fallo)",
+      subtitle = "Excluye mediciones de 31 Ago y 25 Sep (líneas punteadas muestran su posición)",
+      x = "Fecha",
+      y = expression(OD~(mu*mol/L)),
+      color = "Sitio"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold", size = 14)
+    )
+  
+  print(p_wet_AB_2)
+  
+  # ==========================================
+  # 1. GRÁFICO 1: MARCANDO LAS FECHAS (CON TODOS LOS DATOS)
+  # ==========================================
+  p_wet_AB_1 <- od %>%
+    filter(tolower(as.character(treatment)) %in% c("wet", "w")) %>%
+    ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+    
+    # Puntos individuales
+    geom_point(alpha = 0.3, position = position_jitter(width = 0.1, height = 0)) +
+    
+    # Línea y puntos del promedio por fecha
+    stat_summary(fun = mean, geom = "line", linewidth = 1.2) +
+    stat_summary(fun = mean, geom = "point", size = 2.5) +
+    
+    # Líneas de referencia verticales
+    geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+    
+    # Etiquetas de texto superiores
+    annotate(
+      "text", x = as.Date("2026-08-31"), y = Inf, 
+      label = " 31 Ago", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    annotate(
+      "text", x = as.Date("2026-09-25"), y = Inf, 
+      label = " 25 Sep", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    
+    labs(
+      title = "Tratamiento Wet: Comparación Sitio A vs Sitio B (Fechas Marcadas)",
+      subtitle = "Líneas rojas punteadas: 31 de Agosto y 25 de Septiembre",
+      x = "Fecha",
+      y = expression(OD~(mu*mol/L)),
+      color = "Sitio"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold", size = 14)
+    )
+  
+  print(p_wet_AB_1)
+  
+  # ==========================================
+  # 2. GRÁFICO 2: ELIMINANDO LOS PUNTOS DE ESAS FECHAS
+  # ==========================================
+  p_wet_AB_2 <- od %>%
+    filter(
+      tolower(as.character(treatment)) %in% c("wet", "w"),
+      !(as.Date(date) %in% fechas_clave) # Excluye las mediciones de 31-Ago y 25-Sep
+    ) %>%
+    ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+    
+    # Puntos individuales sin las fechas filtradas
+    geom_point(alpha = 0.3, position = position_jitter(width = 0.1, height = 0)) +
+    
+    # Línea y puntos del promedio recalculados sin esas fechas
+    stat_summary(fun = mean, geom = "line", linewidth = 1.2) +
+    stat_summary(fun = mean, geom = "point", size = 2.5) +
+    
+    # Líneas de referencia verticales donde estaban las fechas excluidas
+    geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+    
+    # Etiquetas superiores
+    annotate(
+      "text", x = as.Date("2026-08-31"), y = Inf, 
+      label = " 31 Ago (Excluido)", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    annotate(
+      "text", x = as.Date("2026-09-25"), y = Inf, 
+      label = " 25 Sep (Excluido)", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+    ) +
+    
+    labs(
+      title = "Tratamiento Wet: Comparación Sitio A vs Sitio B (Sin Fechas de Fallo)",
+      subtitle = "Excluye mediciones de 31 Ago y 25 Sep (líneas punteadas muestran su posición)",
+      x = "Fecha",
+      y = expression(OD~(mu*mol/L)),
+      color = "Sitio"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold", size = 14)
+    )
+  
+  print(p_wet_AB_2))
+
+# ==========================================
+# WET (TODOS LOS DÍAS): PROMEDIO Y DESVIACIÓN ESTÁNDAR CON FECHAS MARCADAS
+# ==========================================
+od %>%
+  filter(tolower(treatment) %in% c("wet", "w")) %>%
+  group_by(date, site) %>%
+  summarise(
+    OD_media = mean(OD_umolL, na.rm = TRUE),
+    OD_sd    = sd(OD_umolL, na.rm = TRUE),
+    .groups  = "drop"
+  ) %>%
+  ggplot(aes(x = date, y = OD_media, color = site, fill = site, group = site)) +
+  
+  # Sombra de Desviación Estándar
+  geom_ribbon(aes(ymin = OD_media - OD_sd, ymax = OD_media + OD_sd), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  
+  #  #  # ahora que este mismo muestre las fechas donde fallaron las camaras
+  
+    # 1. Líneas verticales de referencia en 31 Ago y 25 Sep
+  geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+  
+  # 2. Resaltar con círculos los puntos que caigan exactamente en esas fechas
+  geom_point(
+    data = . %>% filter(date %in% fechas_clave),
+    aes(x = date, y = OD_media),
+    size = 4, shape = 21, stroke = 1.5, fill = "yellow"
+  ) +
+  
+  # 3. Etiquetas de texto flotantes en la parte superior del gráfico
+  annotate(
+    "text", x = as.Date("2026-08-31"), y = Inf, 
+    label = " 31 Ago", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  annotate(
+    "text", x = as.Date("2026-09-25"), y = Inf, 
+    label = " 25 Sep", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  
+  labs(
+    title = "Screening Tratamiento Wet: Promedio y Desviación Estándar",
+    subtitle = "Líneas punteadas rojas: 31 de Agosto y 25 de Septiembre",
+    x = "Fecha",
+    y = expression(Promedio~OD~(mu*mol/L)),
+    color = "Sitio",
+    fill  = "Sitio"
+  ) +
+  theme_minimal()
+
+
+
+ACA LE PEDI QUE ELIMINE LOS PUNTOS DE LOS DIAS DE LOS FALLOS
+# Definir las fechas a EXCLUIR por fallo de cámaras
+fechas_clave <- as.Date(c("2026-08-31", "2026-09-25"))
+
+# ==========================================
+# WET (TODOS LOS DÍAS): PROMEDIO Y SD EXCLUYENDO FALLOS DE CÁMARAS
+# ==========================================
+od %>%
+  filter(
+    tolower(treatment) %in% c("wet", "w"),
+    !(as.Date(date) %in% fechas_clave) # Elimina los datos del 31 Ago y 25 Sep
+  ) %>%
+  group_by(date, site) %>%
+  summarise(
+    OD_media = mean(OD_umolL, na.rm = TRUE),
+    OD_sd    = sd(OD_umolL, na.rm = TRUE),
+    .groups  = "drop"
+  ) %>%
+  ggplot(aes(x = date, y = OD_media, color = site, fill = site, group = site)) +
+  
+  # Sombra de Desviación Estándar y línea sin los puntos excluidos
+  geom_ribbon(aes(ymin = OD_media - OD_sd, ymax = OD_media + OD_sd), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  
+  # 1. Líneas verticales de referencia donde ocurrieron los fallos
+  geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+  
+  # 2. Etiquetas superiores indicando las fechas excluidas
+  annotate(
+    "text", x = as.Date("2026-08-31"), y = Inf, 
+    label = " 31 Ago (Fallo)", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  annotate(
+    "text", x = as.Date("2026-09-25"), y = Inf, 
+    label = " 25 Sep (Fallo)", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  
+  labs(
+    title = "Screening Tratamiento Wet: Promedio y Desviación Estándar",
+    subtitle = "Excluye datos de 31 Ago y 25 Sep (marcado con líneas punteadas rojas)",
+    x = "Fecha",
+    y = expression(Promedio~OD~(mu*mol/L)),
+    color = "Sitio",
+    fill  = "Sitio"
+  ) +
+  theme_minimal()
+
+# ==========================================
+# 4. FILTRAR Y COMPARAR (REMOVIENDO VIERNES 'V')
+# ==========================================
+
+
+# Filtrar removiendo las mediciones de los viernes ('V')
+od_sin_V <- od %>%
+  filter(L_M_V != "V")
+
+# Crear dataset comparativo
+od_comparativa <- bind_rows(
+  od %>% mutate(grupo_filtro = "Con V (Completo)"),
+  od_sin_V %>% mutate(grupo_filtro = "Sin V (Sin Viernes)")
+)
+
+# Gráfico comparativo de series temporales
+ggplot(od_comparativa, aes(x = date, y = OD_umolL, color = treatment)) +
+  geom_line(alpha = 0.6) +
+  facet_grid(grupo_filtro ~ site) +
+  labs(
+    title = "Comparación de Serie Temporal: Con V vs Sin V",
+    x = "Fecha",
+    y = expression(OD~(mu*mol/L))
+  ) +
+  theme_minimal()
+
+# ==========================================
+# 1. PROMEDIO SITIO A vs B (SIN VIERNES 'V')
+# ==========================================
+od %>%
+  filter(tolower(treatment) %in% c("wet", "w"), L_M_V != "V") %>%
+  group_by(date, site) %>%
+  summarise(OD_umolL = mean(OD_umolL, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Screening Tratamiento Wet: Promedio Sitio A vs Sitio B (Sin V)",
+    x = "Fecha",
+    y = expression(Promedio~OD~(mu*mol/L)),
+    color = "Sitio"
+  ) +
+  theme_minimal()
+
+# ==========================================
+# 2. PROMEDIO Y DESVIACIÓN ESTÁNDAR (SIN VIERNES 'V')
+# ==========================================
+od %>%
+  filter(tolower(treatment) %in% c("wet", "w"), L_M_V != "V") %>%
+  group_by(date, site) %>%
+  summarise(
+    OD_media = mean(OD_umolL, na.rm = TRUE),
+    OD_sd    = sd(OD_umolL, na.rm = TRUE),
+    .groups  = "drop"
+  ) %>%
+  ggplot(aes(x = date, y = OD_media, color = site, fill = site, group = site)) +
+  geom_ribbon(aes(ymin = OD_media - OD_sd, ymax = OD_media + OD_sd), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Screening Tratamiento Wet: Promedio y Desviación Estándar (Sin V)",
+    subtitle = "Líneas: Promedio | Sombra: ±1 Desviación Estándar | Excluye Viernes",
+    x = "Fecha",
+    y = expression(Promedio~OD~(mu*mol/L)),
+    color = "Sitio",
+    fill  = "Sitio"
+  ) +
+  theme_minimal()
+
+
+
+#Aca le pedi los promedios por fechas pare ver cuando son las caida de los pico
+# Ver la evolución de promedios por fecha en Sitios A y B
+od %>%
+  filter(tolower(as.character(treatment)) %in% c("wet", "w")) %>%
+  group_by(date, site) %>%
+  summarise(OD_promedio = round(mean(OD_umolL, na.rm = TRUE), 1), .groups = "drop") %>%
+  filter(month(date) %in% c(9, 10)) %>% # Filtra Septiembre y Octubre
+  pivot_wider(names_from = site, values_from = OD_promedio) %>%
+  print(n = 40)
+
+
+#Acá filtre para ver solo los lunes:
+# ==========================================
+# 1. PROMEDIO SITIO A vs B (SOLO LUNES 'L')
+# ==========================================
+od %>%
+  filter(tolower(treatment) %in% c("wet", "w"), L_M_V == "L") %>%
+  group_by(date, site) %>%
+  summarise(OD_umolL = mean(OD_umolL, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Screening Tratamiento Wet: Promedio Sitio A vs Sitio B (Solo Lunes 'L')",
+    x = "Fecha",
+    y = expression(Promedio~OD~(mu*mol/L)),
+    color = "Sitio"
+  ) +
+  theme_minimal()
+
+# ==========================================
+# 2. PROMEDIO Y DESVIACIÓN ESTÁNDAR (SOLO LUNES 'L')
+# ==========================================
+od %>%
+  filter(tolower(treatment) %in% c("wet", "w"), L_M_V == "L") %>%
+  group_by(date, site) %>%
+  summarise(
+    OD_media = mean(OD_umolL, na.rm = TRUE),
+    OD_sd    = sd(OD_umolL, na.rm = TRUE),
+    .groups  = "drop"
+  ) %>%
+  ggplot(aes(x = date, y = OD_media, color = site, fill = site, group = site)) +
+  geom_ribbon(aes(ymin = OD_media - OD_sd, ymax = OD_media + OD_sd), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Screening Tratamiento Wet: Promedio y Desviación Estándar (Solo Lunes 'L')",
+    subtitle = "Líneas: Promedio | Sombra: ±1 Desviación Estándar | Filtro: Lunes ('L')",
+    x = "Fecha",
+    y = expression(Promedio~OD~(mu*mol/L)),
+    color = "Sitio",
+    fill  = "Sitio"
+  ) +
+  theme_minimal()
+
+#Acá le pedi que marque las fechas en que fallaron las cámaras
+# Definir las fechas que deseas marcar en el eje de tiempo
+fechas_clave <- as.Date(c("2026-08-31", "2026-09-25"))
+
+# ==========================================
+# PROMEDIO Y DESVIACIÓN ESTÁNDAR (SOLO LUNES 'L') CON FECHAS DESTACADAS
+# ==========================================
+od %>%
+  filter(tolower(treatment) %in% c("wet", "w"), L_M_V == "L") %>%
+  group_by(date, site) %>%
+  summarise(
+    OD_media = mean(OD_umolL, na.rm = TRUE),
+    OD_sd    = sd(OD_umolL, na.rm = TRUE),
+    .groups  = "drop"
+  ) %>%
+  ggplot(aes(x = date, y = OD_media, color = site, fill = site, group = site)) +
+  geom_ribbon(aes(ymin = OD_media - OD_sd, ymax = OD_media + OD_sd), alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  
+  # 1. Líneas verticales de referencia en las fechas indicadas
+  geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+  
+  # 2. Resaltar con un círculo los puntos que coincidan con esas fechas (ej. 31 Ago)
+  geom_point(
+    data = . %>% filter(date %in% fechas_clave),
+    aes(x = date, y = OD_media),
+    size = 4, shape = 21, stroke = 1.5, fill = "yellow"
+  ) +
+  
+  # 3. Etiquetas de texto en la parte superior del gráfico
+  annotate(
+    "text", x = as.Date("2026-08-31"), y = Inf, 
+    label = " 31 Ago", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  annotate(
+    "text", x = as.Date("2026-09-25"), y = Inf, 
+    label = " 25 Sep", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  
+  labs(
+    title = "Screening Tratamiento Wet: Promedio y Desviación Estándar (Solo Lunes 'L')",
+    subtitle = "Líneas verticales rojas: 31 de Agosto y 25 de Septiembre",
+    x = "Fecha",
+    y = expression(Promedio~OD~(mu*mol/L)),
+    color = "Sitio",
+    fill  = "Sitio"
+  ) +
+  theme_minimal()
+
+# Definir las fechas de referencia
+fechas_clave <- as.Date(c("2026-08-31", "2026-09-25"))
+
+# ==========================================
+# 1. GRÁFICO 1: MARCANDO LAS FECHAS (CON TODOS LOS DATOS)
+# ==========================================
+p_wet_AB_1 <- od %>%
+  filter(tolower(as.character(treatment)) %in% c("wet", "w")) %>%
+  ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+  
+  # Puntos individuales
+  geom_point(alpha = 0.3, position = position_jitter(width = 0.1, height = 0)) +
+  
+  # Línea y puntos del promedio por fecha
+  stat_summary(fun = mean, geom = "line", linewidth = 1.2) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  
+  # Líneas de referencia verticales
+  geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+  
+  # Etiquetas de texto superiores
+  annotate(
+    "text", x = as.Date("2026-08-31"), y = Inf, 
+    label = " 31 Ago", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  annotate(
+    "text", x = as.Date("2026-09-25"), y = Inf, 
+    label = " 25 Sep", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  
+  labs(
+    title = "Tratamiento Wet: Evolución temporal del OD en Sitio A y  B",
+    x = "Fecha",
+    y = expression(OD~(mu*mol/L)),
+    color = "Sitio"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+
+print(p_wet_AB_1)
+
+# ==========================================
+# 2. GRÁFICO 2: ELIMINANDO LOS PUNTOS DE ESAS FECHAS
+# ==========================================
+p_wet_AB_2 <- od %>%
+  filter(
+    tolower(as.character(treatment)) %in% c("wet", "w"),
+    !(as.Date(date) %in% fechas_clave) # Excluye las mediciones de 31-Ago y 25-Sep
+  ) %>%
+  ggplot(aes(x = date, y = OD_umolL, color = site, group = site)) +
+  
+  # Puntos individuales sin las fechas filtradas
+  geom_point(alpha = 0.3, position = position_jitter(width = 0.1, height = 0)) +
+  
+  # Línea y puntos del promedio recalculados sin esas fechas
+  stat_summary(fun = mean, geom = "line", linewidth = 1.2) +
+  stat_summary(fun = mean, geom = "point", size = 2.5) +
+  
+  # Líneas de referencia verticales donde estaban las fechas excluidas
+  geom_vline(xintercept = fechas_clave, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+  
+  # Etiquetas superiores
+  annotate(
+    "text", x = as.Date("2026-08-31"), y = Inf, 
+    label = " 31 Ago ", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  annotate(
+    "text", x = as.Date("2026-09-25"), y = Inf, 
+    label = " 25 Sep (Fallo cámara y traslado", vjust = 1.5, hjust = -0.1, color = "firebrick", fontface = "bold"
+  ) +
+  
+  labs(
+    title = "Tratamiento Wet: Evolución temporal del OD en Sitio A y  B",
+    subtitle = "Excluye mediciones de 31 Ago y 25 Sep",
+    x = "Fecha",
+    y = expression(OD~(mu*mol/L)),
+    color = "Sitio"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+
+print(p_wet_AB_2)
+
