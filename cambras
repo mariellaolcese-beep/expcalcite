@@ -1,0 +1,69 @@
+library(ggplot2)
+library(lubridate)
+
+# 1. Carregar dades evitant conflictes de codificació
+ruta_fitxer <- "C:/Experimentcalcite/data/Cambra_21_Dalt_2026.csv"
+df <- read.csv2(ruta_fitxer, check.names = FALSE, stringsAsFactors = FALSE, fileEncoding = "latin1")
+
+# 2. Seleccionar per POSICIÓ de columna (independentment del nom)
+# Columna 1 = Time | Columna 2 = Temperatura | Columna 3 = Humitat
+df$Time_clean <- parse_date_time(
+  df[[1]], 
+  orders = c("ymd HM", "ymd HMS", "dmy HM", "dmy HMS", "mdy HM", "mdy HMS")
+)
+df$Temp_clean <- as.numeric(gsub(",", ".", as.character(df[[2]])))
+df$Hum_clean  <- as.numeric(gsub(",", ".", as.character(df[[3]])))
+
+# 3. Factor d'escala per al segon eix Y
+coef_escala <- 2.5 
+
+# 4. Generar la gràfica de sèrie temporal
+ggplot(df[!is.na(df$Time_clean), ], aes(x = Time_clean)) +
+  geom_line(aes(y = Temp_clean, color = "Temperatura (°C)"), linewidth = 0.8) +
+  geom_line(aes(y = Hum_clean / coef_escala, color = "Humitat (%RH)"), linewidth = 0.8) +
+  scale_y_continuous(
+    name = "Temperatura (°C)",
+    sec.axis = sec_axis(~ . * coef_escala, name = "Humitat (%RH)")
+  ) +
+  scale_color_manual(values = c("Temperatura (°C)" = "#D95F02", "Humitat (%RH)" = "#1B9E77")) +
+  theme_minimal() +
+  labs(
+    title = "Sèrie Temporal: Temperatura i Humitat (Cambra 21 Dalt)",
+    x = "Temps",
+    color = "Llegenda"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 13),
+    axis.title.y = element_text(color = "#D95F02", face = "bold"),
+    axis.title.y.right = element_text(color = "#1B9E77", face = "bold"),
+    legend.position = "bottom"
+  )
+
+####AHORA QUE FILTRE DESDE JULIO
+df <- df[!is.na(df$Time_clean) & df$Time_clean >= ymd("2026-07-01"), ]
+
+# 4. Factor d'escala per al segon eix Y
+coef_escala <- 2.5 
+
+# 5. Generar la gràfica de sèrie temporal
+ggplot(df, aes(x = Time_clean)) +
+  geom_line(aes(y = Temp_clean, color = "Temperatura (°C)"), linewidth = 0.8) +
+  geom_line(aes(y = Hum_clean / coef_escala, color = "Humitat (%RH)"), linewidth = 0.8) +
+  scale_y_continuous(
+    name = "Temperatura (°C)",
+    sec.axis = sec_axis(~ . * coef_escala, name = "Humitat (%RH)")
+  ) +
+  scale_color_manual(values = c("Temperatura (°C)" = "#D95F02", "Humitat (%RH)" = "#1B9E77")) +
+  theme_minimal() +
+  labs(
+    title = "Sèrie Temporal (Des de Juliol): Temperatura i Humitat (Cambra 21 Dalt)",
+    x = "Temps",
+    color = "Llegenda"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 13),
+    axis.title.y = element_text(color = "#D95F02", face = "bold"),
+    axis.title.y.right = element_text(color = "#1B9E77", face = "bold"),
+    legend.position = "bottom"
+  )
+
