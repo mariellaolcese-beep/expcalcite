@@ -21,7 +21,7 @@ library(tidyverse)
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 archivo      <- "C:/Experimentcalcite/data/planilla_total.csv"
 carpeta_out  <- "C:/Experimentcalcite/resultados"
-codificacion <- "UTF-8"          
+codificacion <- "UTF-8"
 M_Ca         <- 40.078           # g/mol: ppm (mg/L) / M_Ca = mM
 dias_inc     <- 1                # incubación de 24 h
 stage_plot   <- "final"          # etapa para el gráfico de masas
@@ -32,10 +32,23 @@ col_site     <- c(A = "#B4532A", B = "#2F6F73")
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 num <- function(x) suppressWarnings(as.numeric(gsub(",", ".", as.character(x))))
 
-primera <- readLines(archivo, n = 1, warn = FALSE, encoding = codificacion)
-sep <- if (grepl(";", primera)) ";" else if (grepl("\t", primera)) "\t" else ","
-pl <- read_delim(archivo, delim = sep, col_types = cols(.default = col_character()),
-                 locale = locale(encoding = codificacion), na = c("", "NA"), show_col_types = FALSE)
+lineas <- readLines(archivo, n = 20, warn = FALSE, encoding = codificacion)
+fila_header <- grep("sample_id", lineas)[1]
+if (is.na(fila_header)) stop("No se encontró 'sample_id' en las primeras 20 líneas del archivo.")
+
+linea_hdr <- lineas[fila_header]
+sep <- if (grepl(";", linea_hdr)) ";" else if (grepl("\t", linea_hdr)) "\t" else ","
+
+pl <- read_delim(
+  archivo,
+  delim = sep,
+  skip = fila_header - 1,
+  col_types = cols(.default = col_character()),
+  locale = locale(encoding = codificacion),
+  na = c("", "NA"),
+  show_col_types = FALSE
+)
+pl <- pl[, !grepl("^\\.\\.\\.[0-9]+$", names(pl))]
 
 necesarias <- c("sample_id", "extraction_time", "stage", "treatment", "site",
                 "Sed_init_dry_g", "water_sed_init_mL", "g_OL", "g_PW", "sed_ST_g", "Vild_total_g",
@@ -52,16 +65,16 @@ ca <- pl %>%
     site   = factor(site, levels = c("A", "B")),
     rep    = as.integer(str_extract(sample_id, "\\d+$")),
     # --- datos de entrada tal como están en la planilla ---
-    Sed_dry_g  = num(Sed_init_dry_g),
-    sed_ST_g   = num(sed_ST_g),
-    g_OL       = num(g_OL),
-    g_PW       = num(g_PW),         # agua de poro REALMENTE extraída (centrifugada)
-    Vild_total_g = num(Vild_total_g),
+    Sed_dry_g         = num(Sed_init_dry_g),
+    sed_ST_g          = num(sed_ST_g),
+    g_OL              = num(g_OL),
+    g_PW              = num(g_PW),              # agua de poro REALMENTE extraída (centrifugada)
+    Vild_total_g      = num(Vild_total_g),
     water_sed_init_mL = num(water_sed_init_mL),
-    Ca_vd_ppm    = num(Ca_vd_ppm),       # Viladrau
-    Ca_pwsed_ppm = num(Ca_pwsed_ppm),    # agua de poro del sedimento inicial (centrifugada)
-    Ca_OL_ppm    = num(Ca_OL_ppm),
-    Ca_PW_ppm    = num(Ca_PW_ppm),
+    Ca_vd_ppm         = num(Ca_vd_ppm),         # Viladrau
+    Ca_pwsed_ppm      = num(Ca_pwsed_ppm),      # agua de poro del sedimento inicial (centrifugada)
+    Ca_OL_ppm         = num(Ca_OL_ppm),
+    Ca_PW_ppm         = num(Ca_PW_ppm)
   ) %>%
   filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage))   # quita filas vacías
 
@@ -75,43 +88,44 @@ ca <- ca %>%
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 #                                                                                             2. DEFINIR ENTRADAS DE CALCIO
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#                                                                                                                                                                                                               
-  ca <- ca %>%
+ ca <- ca %>%
   mutate(
-# PASO 1. Pasamos las concentraciones a mM (ppm / M_Ca)
+    # PASO 1. Pasamos las concentraciones a mM (ppm / M_Ca)
     p1_Ca_vd_mM    = Ca_vd_ppm    / M_Ca,
     p1_Ca_pwsed_mM = Ca_pwsed_ppm / M_Ca,
     p1_Ca_OL_mM    = Ca_OL_ppm    / M_Ca,
     p1_Ca_PW_mM    = Ca_PW_ppm    / M_Ca,
-    
-# PASO 2. Volúmenes iniciales y finales por compartimento (mL ≈ g)
+
+    # PASO 2. Volúmenes iniciales y finales por compartimento (mL ≈ g)
     p2_V_OL_ini_mL = Vild_total_g,
     p2_V_PW_ini_mL = water_sed_init_mL,
     p2_V_OL_fin_mL = g_OL,
     p2_V_PW_fin_mL = sed_ST_g - Sed_dry_g,   # agua de poro total teórica (sedimento húmedo - seco)
-    
-  # PASO 3: ENTRADA de Ca por compartimento (mmol) = mM * mL / 1000
-  p3_Ca_in_OL_mmol    = p1_Ca_vd_mM    * p2_V_OL_ini_mL / 1000,
-  p3_Ca_in_PW_mmol    = p1_Ca_pwsed_mM * p2_V_PW_ini_mL / 1000,
-  p3_Ca_in_total_mmol = p3_Ca_in_OL_mmol + p3_Ca_in_PW_mmol,
-  
-  # PASO 4: CC FINAL de Ca por compartimento (mmol)
-  p4_Ca_fin_OL_mmol    = p1_Ca_OL_mM * p2_V_OL_fin_mL / 1000,
-  # CORREGIDA: concentración observada x volumen TEÓRICO (toda el agua de poro)
-  p4_Ca_fin_PW_mmol    = p1_Ca_PW_mM * p2_V_PW_fin_mL / 1000,
-  p4_Ca_fin_total_mmol = p4_Ca_fin_OL_mmol + p4_Ca_fin_PW_mmol,
-  # OBSERVADA: concentración observada x volumen realmente extraído (g_PW)
-  p4_Ca_fin_PW_obs_mmol    = p1_Ca_PW_mM * g_PW / 1000,
-  p4_Ca_fin_total_obs_mmol = p4_Ca_fin_OL_mmol + p4_Ca_fin_PW_obs_mmol,
-  p4_factor_correccion_PW  = p2_V_PW_fin_mL / g_PW,     # volumen teórico / volumen extraído
-  
-  # PASO 5: AHORA SACAMOS EL NETO = FINAL - ENTRADA, por compartimento y total
-  p5_Ca_neto_OL_mmol    = p4_Ca_fin_OL_mmol - p3_Ca_in_OL_mmol,
-  p5_Ca_neto_PW_mmol    = p4_Ca_fin_PW_mmol - p3_Ca_in_PW_mmol,
-  p5_Ca_neto_total_mmol = p5_Ca_neto_OL_mmol + p5_Ca_neto_PW_mmol,
-  p5_Ca_neto_pct_entrada = 100 * p5_Ca_neto_total_mmol / p3_Ca_in_total_mmol,
-  p5_Ca_neto_total_obs_mmol = p4_Ca_fin_total_obs_mmol - p3_Ca_in_total_mmol,   # con masa observada
-  
- # Revisión
+
+    # PASO 3: ENTRADA de Ca por compartimento (mmol) = mM * mL / 1000
+    p3_Ca_in_OL_mmol    = p1_Ca_vd_mM    * p2_V_OL_ini_mL / 1000,
+    p3_Ca_in_PW_mmol    = p1_Ca_pwsed_mM * p2_V_PW_ini_mL / 1000,
+    p3_Ca_in_total_mmol = p3_Ca_in_OL_mmol + p3_Ca_in_PW_mmol,
+
+    # PASO 4: CC FINAL de Ca por compartimento (mmol)
+    p4_Ca_fin_OL_mmol        = p1_Ca_OL_mM * p2_V_OL_fin_mL / 1000,
+    # CORREGIDA: concentración observada x volumen TEÓRICO (toda el agua de poro)
+    p4_Ca_fin_PW_mmol        = p1_Ca_PW_mM * p2_V_PW_fin_mL / 1000,
+    p4_Ca_fin_total_mmol     = p4_Ca_fin_OL_mmol + p4_Ca_fin_PW_mmol,
+    # OBSERVADA: concentración observada x volumen realmente extraído (g_PW)
+    p4_Ca_fin_PW_obs_mmol    = p1_Ca_PW_mM * g_PW / 1000,
+    p4_Ca_fin_total_obs_mmol = p4_Ca_fin_OL_mmol + p4_Ca_fin_PW_obs_mmol,
+    p4_factor_correccion_PW  = p2_V_PW_fin_mL / g_PW,     # volumen teórico / volumen extraído
+
+    # PASO 5: AHORA SACAMOS EL NETO = FINAL - ENTRADA, por compartimento y total
+    p5_Ca_neto_OL_mmol        = p4_Ca_fin_OL_mmol - p3_Ca_in_OL_mmol,
+    p5_Ca_neto_PW_mmol        = p4_Ca_fin_PW_mmol - p3_Ca_in_PW_mmol,
+    p5_Ca_neto_total_mmol     = p5_Ca_neto_OL_mmol + p5_Ca_neto_PW_mmol,
+    p5_Ca_neto_pct_entrada    = 100 * p5_Ca_neto_total_mmol / p3_Ca_in_total_mmol,
+    p5_Ca_neto_total_obs_mmol = p4_Ca_fin_total_obs_mmol - p3_Ca_in_total_mmol   # con masa observada
+  )
+
+# Revisión
 ca %>% filter(is.na(p5_Ca_neto_total_mmol)) %>%
   select(sample_id, Ca_OL_ppm, Ca_PW_ppm, Ca_vd_ppm, Ca_pwsed_ppm, p2_V_PW_fin_mL)   # datos que faltan
 ca %>% filter(p2_V_PW_fin_mL < 0 | p2_V_PW_fin_mL > 40) %>%
@@ -141,7 +155,7 @@ final <- ca %>% filter(stage == "final") %>%
     p8_dCa_OL_mmol    = p5_Ca_neto_OL_mmol    - p5_Ca_neto_OL_mmol_I,
     p8_dCa_PW_mmol    = p5_Ca_neto_PW_mmol    - p5_Ca_neto_PW_mmol_I,
     p8_dCa_total_mmol = p5_Ca_neto_total_mmol - p5_Ca_neto_total_mmol_I,
-    
+
     # Tasas (por día y por g de sedimento seco)
     p9_tasa_Ca_mmol_d   = p8_dCa_total_mmol / dias_inc,
     p9_tasa_Ca_umol_g_d = p9_tasa_Ca_mmol_d * 1000 / Sed_dry_g
@@ -162,7 +176,7 @@ delta_t <- final %>%
   group_by(tiempo, site, trt) %>%
   summarise(n_final = n(), n_initial = first(n_initial),
             across(c(p8_dCa_OL_mmol, p8_dCa_PW_mmol, p8_dCa_total_mmol,
-                             p9_tasa_Ca_mmol_d, p9_tasa_Ca_umol_g_d),
+                     p9_tasa_Ca_mmol_d, p9_tasa_Ca_umol_g_d),
                    list(m = ~ mean(.x, na.rm = TRUE), sd = ~ sd(.x, na.rm = TRUE)),
                    .names = "{.col}__{.fn}"), .groups = "drop") %>%
   mutate(p8_distinguible = abs(p8_dCa_total_mmol__m) > 2 * p8_dCa_total_mmol__sd)
@@ -227,7 +241,7 @@ p_delta <- ggplot(delta_larga, aes(factor(tiempo), m, fill = compartimento)) +
   facet_grid(trt ~ site, labeller = label_both) +
   scale_fill_manual(values = c(OL = "#9DB8B9", PW = "#D8C8A8", Total = "#B4532A"), name = NULL) +
   labs(x = "Time", y = "Δ Ca final - inicial (mmol / 24 h)",
-       subtitle = " Ca: OL, PW y total") + tema
+       subtitle = "Ca: OL, PW y total") + tema
 p_delta
 
 # 5d. Viladrau añadida (masa de Ca) y delta del neto (baseline = initial)
@@ -251,16 +265,16 @@ p_vil_delta <- bind_rows(vil, dl) %>% filter(!is.na(m)) %>%
   scale_fill_manual(values = col_site, name = "Sitio") +
   labs(x = "Tiempo", y = NULL) + tema
 p_vil_delta
-ggsave(file.path(carpeta_out, "Ca_viladrau_y_delta.png"), p_vil_delta, width = 9, height = 6, dpi = 300)
-
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 #                                                                                                         6. GUARDAR (CSV)
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 dir.create(carpeta_out, showWarnings = FALSE, recursive = TRUE)
-ggsave(file.path(carpeta_out, "Ca_masas.png"),          p_masas, width = 11, height = 6,  dpi = 300)
-ggsave(file.path(carpeta_out, "Ca_neto_compartimentos.png"), p_neto, width = 10, height = 9, dpi = 300)
-ggsave(file.path(carpeta_out, "Ca_delta_compartimentos.png"), p_delta, width = 10, height = 6, dpi = 300)
+
+ggsave(file.path(carpeta_out, "Ca_viladrau_y_delta.png"),     p_vil_delta, width = 9,  height = 6, dpi = 300)
+ggsave(file.path(carpeta_out, "Ca_masas.png"),                p_masas,     width = 11, height = 6, dpi = 300)
+ggsave(file.path(carpeta_out, "Ca_neto_compartimentos.png"),  p_neto,      width = 10, height = 9, dpi = 300)
+ggsave(file.path(carpeta_out, "Ca_delta_compartimentos.png"), p_delta,     width = 10, height = 6, dpi = 300)
 
 write_csv(final %>% select(sample_id, tiempo, site, trt, rep, starts_with("p8_"), starts_with("p9_")),
           file.path(carpeta_out, "2_delta_final_inicial_por_frasco.csv"))
@@ -273,7 +287,7 @@ diccionario <- tribble(
   "p2_V_OL_ini_mL", "2", "Viladrau total puesta en el frasco (Vild_total_g: 30 mL + reposiciones semanales)",
   "p2_V_PW_ini_mL", "2", "Agua del sedimento inicial (water_sed_init_mL)",
   "p2_V_OL_fin_mL", "2", "Agua suprayacente al sacrificar (g_OL)",
-  "p2_V_PW_fin_mL", "2", "Agua de poro total al sacrificar = sed_ST_g - g_OL - Sed_init_dry_g",
+  "p2_V_PW_fin_mL", "2", "Agua de poro total al sacrificar = sed_ST_g - Sed_init_dry_g",
   "p3_Ca_in_*_mmol", "3", "Ca de ENTRADA (mmol) = mM x mL / 1000. OL = Viladrau; PW = agua del sedimento inicial",
   "p4_Ca_fin_*_mmol", "4", "Ca FINAL CORREGIDO (mmol) = mM x volumen TEORICO (toda el agua de poro)",
   "p4_Ca_fin_*_obs_mmol", "4", "Ca FINAL OBSERVADO (mmol) = mM x volumen realmente extraido (g_PW)",
@@ -283,8 +297,8 @@ diccionario <- tribble(
   "p5_Ca_neto_total_obs_mmol", "5", "Neto total usando la masa observada (sin corregir): subestima el PW",
   "p6_Ca_neto_u_mmol", "6", "Incertidumbre del neto por el ICP (7 % de cada masa, combinada)",
   "p6_neto_distinguible", "6", "TRUE si |neto| > 2 x incertidumbre",
-    "p8_dCa_*_mmol", "8", "DELTA = NETO del frasco final - NETO medio de los frascos initial del mismo tiempo, sitio y tratamiento",
-    "p9_tasa_Ca_mmol_d", "9", "Delta total / 1 día (mmol por frasco y día)",
+  "p8_dCa_*_mmol", "8", "DELTA = NETO del frasco final - NETO medio de los frascos initial del mismo tiempo, sitio y tratamiento",
+  "p9_tasa_Ca_mmol_d", "9", "Delta total / 1 día (mmol por frasco y día)",
   "p9_tasa_Ca_umol_g_d", "9", "Tasa por g de sedimento seco (umol por g y día)"
 )
 write_csv(diccionario, file.path(carpeta_out, "0_diccionario_de_columnas.csv"))
