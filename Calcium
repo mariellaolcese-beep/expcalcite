@@ -1,39 +1,35 @@
-# =====================================================================
-# Balance de masa de Ca por compartimento y total, paso a paso
+# ================================================================================================================================================================================================================================#
+#                                                                                CALCIUM, HAY QUE ARREGLAR LOS GRAFICOS PORQUE ESTAN HORRIBLES!!!!!!!!!
+# ================================================================================================================================================================================================================================#
+#
 # Archivo: C:/Experimentcalcite/data/planilla_total.csv
 #
 # Compartimentos (solo las aguas):
 #   OL = agua suprayacente   (entrada: Viladrau total añadida; el agua nativa se decantó al inicio)
 #   PW = agua de poro        (entrada: agua del sedimento inicial)
-# Lógica:
+#   Lógica:
 #   ENTRADA_comp = lo que se puso en ese compartimento
 #   FINAL_comp   = lo medido al sacrificar (ppm -> mM -> x volumen)
 #   NETO_comp    = FINAL_comp - ENTRADA_comp
 #   NETO_total   = NETO_OL + NETO_PW
-#   El Ca no se pierde por evaporación, así que un NETO_total negativo = el Ca pasó al sólido
-#   (precipitación/adsorción) y uno positivo = el sólido liberó Ca.
-#   DELTA = NETO del frasco final - NETO medio de los frascos initial (mismo tiempo, sitio, tratamiento).
-#   Así se cancela el desajuste sistemático del tiempo 0.
-# Todas las columnas intermedias quedan en los CSV, con un diccionario de pasos.
-# =====================================================================
+# ================================================================================================================================================================================================================================#
 
 library(tidyverse)
 
-# ---------------------------------------------------------------------
-# 0. AJUSTES
-# ---------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+#                                                                                                              0. AJUSTES
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 archivo      <- "C:/Experimentcalcite/data/planilla_total.csv"
 carpeta_out  <- "C:/Experimentcalcite/resultados"
-codificacion <- "UTF-8"          # si los nombres salen raros, prueba "latin1"
+codificacion <- "UTF-8"          
 M_Ca         <- 40.078           # g/mol: ppm (mg/L) / M_Ca = mM
 dias_inc     <- 1                # incubación de 24 h
-inc_ICP      <- 0.07             # incertidumbre relativa del Ca por ICP (pendiente de confirmar)
 stage_plot   <- "final"          # etapa para el gráfico de masas
 col_site     <- c(A = "#B4532A", B = "#2F6F73")
 
-# ---------------------------------------------------------------------
-# 1. LEER Y LIMPIAR
-# ---------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+#                                                                                                            1. LEER Y LIMPIAR
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 num <- function(x) suppressWarnings(as.numeric(gsub(",", ".", as.character(x))))
 
 primera <- readLines(archivo, n = 1, warn = FALSE, encoding = codificacion)
@@ -76,28 +72,29 @@ ca <- ca %>%
   ungroup() %>%
   mutate(Ca_vd_ppm = coalesce(Ca_vd_ppm, mean(Ca_vd_ppm, na.rm = TRUE)))
 
-# ---------------------------------------------------------------------
-# 2. PASO A PASO POR FRASCO
-# ---------------------------------------------------------------------
-ca <- ca %>% mutate(
-  # PASO 1. Concentraciones de Ca en mM = ppm / M_Ca
-  p1_Ca_vd_mM    = Ca_vd_ppm    / M_Ca,
-  p1_Ca_pwsed_mM = Ca_pwsed_ppm / M_Ca,
-  p1_Ca_OL_mM    = Ca_OL_ppm    / M_Ca,
-  p1_Ca_PW_mM    = Ca_PW_ppm    / M_Ca,
-  
-  # PASO 2. Volúmenes (mL, 1 g de agua = 1 mL)
-  p2_V_OL_ini_mL = Vild_total_g,                       # Viladrau total puesta (30 mL + reposiciones)
-  p2_V_PW_ini_mL = water_sed_init_mL,                  # agua del sedimento inicial
-  p2_V_OL_fin_mL = g_OL,                               # agua suprayacente al sacrificar
-  p2_V_PW_fin_mL = sed_ST_g - g_OL - Sed_dry_g,        # TODA el agua de poro (no solo la centrifugada)
-  
-  # PASO 3. ENTRADA de Ca por compartimento (mmol) = mM * mL / 1000
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+#                                                                                             2. DEFINIR ENTRADAS DE CALCIO
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#                                                                                                                                                                                                               
+  ca <- ca %>%
+  mutate(
+# PASO 1. Pasamos las concentraciones a mM (ppm / M_Ca)
+    p1_Ca_vd_mM    = Ca_vd_ppm    / M_Ca,
+    p1_Ca_pwsed_mM = Ca_pwsed_ppm / M_Ca,
+    p1_Ca_OL_mM    = Ca_OL_ppm    / M_Ca,
+    p1_Ca_PW_mM    = Ca_PW_ppm    / M_Ca,
+    
+# PASO 2. Volúmenes iniciales y finales por compartimento (mL ≈ g)
+    p2_V_OL_ini_mL = Vild_total_g,
+    p2_V_PW_ini_mL = water_sed_init_mL,
+    p2_V_OL_fin_mL = g_OL,
+    p2_V_PW_fin_mL = sed_ST_g - Sed_dry_g,   # agua de poro total teórica (sedimento húmedo - seco)
+    
+  # PASO 3: ENTRADA de Ca por compartimento (mmol) = mM * mL / 1000
   p3_Ca_in_OL_mmol    = p1_Ca_vd_mM    * p2_V_OL_ini_mL / 1000,
   p3_Ca_in_PW_mmol    = p1_Ca_pwsed_mM * p2_V_PW_ini_mL / 1000,
   p3_Ca_in_total_mmol = p3_Ca_in_OL_mmol + p3_Ca_in_PW_mmol,
   
-  # PASO 4. FINAL de Ca por compartimento (mmol)
+  # PASO 4: CC FINAL de Ca por compartimento (mmol)
   p4_Ca_fin_OL_mmol    = p1_Ca_OL_mM * p2_V_OL_fin_mL / 1000,
   # CORREGIDA: concentración observada x volumen TEÓRICO (toda el agua de poro)
   p4_Ca_fin_PW_mmol    = p1_Ca_PW_mM * p2_V_PW_fin_mL / 1000,
@@ -107,17 +104,12 @@ ca <- ca %>% mutate(
   p4_Ca_fin_total_obs_mmol = p4_Ca_fin_OL_mmol + p4_Ca_fin_PW_obs_mmol,
   p4_factor_correccion_PW  = p2_V_PW_fin_mL / g_PW,     # volumen teórico / volumen extraído
   
-  # PASO 5. NETO = FINAL - ENTRADA, por compartimento y total
+  # PASO 5: AHORA SACAMOS EL NETO = FINAL - ENTRADA, por compartimento y total
   p5_Ca_neto_OL_mmol    = p4_Ca_fin_OL_mmol - p3_Ca_in_OL_mmol,
   p5_Ca_neto_PW_mmol    = p4_Ca_fin_PW_mmol - p3_Ca_in_PW_mmol,
   p5_Ca_neto_total_mmol = p5_Ca_neto_OL_mmol + p5_Ca_neto_PW_mmol,
   p5_Ca_neto_pct_entrada = 100 * p5_Ca_neto_total_mmol / p3_Ca_in_total_mmol,
   p5_Ca_neto_total_obs_mmol = p4_Ca_fin_total_obs_mmol - p3_Ca_in_total_mmol,   # con masa observada
-  
-  # PASO 6. Incertidumbre del neto por el ICP y si se distingue de 0
-  p6_Ca_neto_u_mmol = inc_ICP * sqrt(p3_Ca_in_OL_mmol^2 + p3_Ca_in_PW_mmol^2 +
-                                       p4_Ca_fin_OL_mmol^2 + p4_Ca_fin_PW_mmol^2),
-  p6_neto_distinguible = abs(p5_Ca_neto_total_mmol) > 2 * p6_Ca_neto_u_mmol,
   
  # Revisión
 ca %>% filter(is.na(p5_Ca_neto_total_mmol)) %>%
@@ -129,10 +121,12 @@ ca %>% group_by(tiempo, trt, stage) %>%                                         
             V_PW_fin = mean(p2_V_PW_fin_mL, na.rm = TRUE), Ca_vd_ppm = mean(Ca_vd_ppm, na.rm = TRUE),
             .groups = "drop") %>% arrange(trt, tiempo, stage) %>% print(n = Inf)
 
-# ---------------------------------------------------------------------
-# 3. DELTA FINAL - INICIAL (PASO 8) POR FRASCO FINAL
-#    Se resta el NETO medio de los frascos initial del mismo tiempo, sitio y tratamiento.
-# ---------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+#                                                                                                       3. DELTA = FINAL - INICIAL
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+
+# Se resta el NETO medio de los frascos initial del mismo tiempo, sitio y tratamiento.
+
 vars_neto <- c("p5_Ca_neto_OL_mmol", "p5_Ca_neto_PW_mmol", "p5_Ca_neto_total_mmol")
 
 base_I <- ca %>% filter(stage == "initial") %>%
@@ -148,14 +142,14 @@ final <- ca %>% filter(stage == "final") %>%
     p8_dCa_PW_mmol    = p5_Ca_neto_PW_mmol    - p5_Ca_neto_PW_mmol_I,
     p8_dCa_total_mmol = p5_Ca_neto_total_mmol - p5_Ca_neto_total_mmol_I,
     
-    # PASO 9. Tasas (por día y por g de sedimento seco)
+    # Tasas (por día y por g de sedimento seco)
     p9_tasa_Ca_mmol_d   = p8_dCa_total_mmol / dias_inc,
     p9_tasa_Ca_umol_g_d = p9_tasa_Ca_mmol_d * 1000 / Sed_dry_g
   )
 
-# ---------------------------------------------------------------------
-# 4. PROMEDIO ENTRE RÉPLICAS POR TIEMPO
-# ---------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+#                                                                                               4. PROMEDIO ENTRE RÉPLICAS POR TIEMPO                                                                                            #
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 vars_resumen <- c("p3_Ca_in_OL_mmol", "p3_Ca_in_PW_mmol", "p4_Ca_fin_OL_mmol", "p4_Ca_fin_PW_mmol",
                   "p5_Ca_neto_total_obs_mmol", vars_neto)
 resumen <- ca %>%
@@ -174,9 +168,10 @@ delta_t <- final %>%
   mutate(p8_distinguible = abs(p8_dCa_total_mmol__m) > 2 * p8_dCa_total_mmol__sd)
 delta_t
 
-# ---------------------------------------------------------------------
-# 5. GRÁFICOS
-# ---------------------------------------------------------------------
+
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+#                                                                                                         5. GRÁFICOS
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 tema <- theme_minimal(base_size = 12) +
   theme(panel.grid.minor = element_blank(), strip.text = element_text(face = "bold"),
         legend.position = "bottom")
@@ -235,11 +230,33 @@ p_delta <- ggplot(delta_larga, aes(factor(tiempo), m, fill = compartimento)) +
        subtitle = " Ca: OL, PW y total") + tema
 p_delta
 
+# 5d. Viladrau añadida (masa de Ca) y delta del neto (baseline = initial)
+vil <- ca %>% filter(stage == "final") %>%
+  group_by(tiempo, site, trt) %>%
+  summarise(m = mean(p3_Ca_in_OL_mmol, na.rm = TRUE),
+            sd = sd(p3_Ca_in_OL_mmol, na.rm = TRUE), .groups = "drop") %>%
+  mutate(panel = "Ca añadido con Viladrau (mmol por frasco)")
+
+dl <- delta_t %>%
+  transmute(tiempo, site, trt, m = p8_dCa_total_mmol__m, sd = p8_dCa_total_mmol__sd,
+            panel = "Δ Ca neto final − initial (mmol por frasco en 24 h)")
+
+p_vil_delta <- bind_rows(vil, dl) %>% filter(!is.na(m)) %>%
+  ggplot(aes(factor(tiempo), m, fill = site)) +
+  geom_col(position = position_dodge(0.8), width = 0.75) +
+  geom_errorbar(aes(ymin = m - sd, ymax = m + sd),
+                position = position_dodge(0.8), width = 0.25) +
+  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
+  facet_grid(panel ~ trt, scales = "free_y") +
+  scale_fill_manual(values = col_site, name = "Sitio") +
+  labs(x = "Tiempo", y = NULL) + tema
+p_vil_delta
+ggsave(file.path(carpeta_out, "Ca_viladrau_y_delta.png"), p_vil_delta, width = 9, height = 6, dpi = 300)
 
 
-# ---------------------------------------------------------------------
-# 6. GUARDAR (CSV con TODOS los pasos + diccionario de columnas)
-# ---------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+#                                                                                                         6. GUARDAR (CSV)
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 dir.create(carpeta_out, showWarnings = FALSE, recursive = TRUE)
 ggsave(file.path(carpeta_out, "Ca_masas.png"),          p_masas, width = 11, height = 6,  dpi = 300)
 ggsave(file.path(carpeta_out, "Ca_neto_compartimentos.png"), p_neto, width = 10, height = 9, dpi = 300)
@@ -272,26 +289,16 @@ diccionario <- tribble(
 )
 write_csv(diccionario, file.path(carpeta_out, "0_diccionario_de_columnas.csv"))
 
-
-# 5e. Viladrau añadida (masa de Ca) y delta del neto (baseline = initial)
-vil <- ca %>% filter(stage == "final") %>%
-  group_by(tiempo, site, trt) %>%
-  summarise(m = mean(p3_Ca_in_OL_mmol, na.rm = TRUE),
-            sd = sd(p3_Ca_in_OL_mmol, na.rm = TRUE), .groups = "drop") %>%
-  mutate(panel = "Ca añadido con Viladrau (mmol por frasco)")
-
-dl <- delta_t %>%
-  transmute(tiempo, site, trt, m = p8_dCa_total_mmol__m, sd = p8_dCa_total_mmol__sd,
-            panel = "Δ Ca neto final − initial (mmol por frasco en 24 h)")
-
-p_vil_delta <- bind_rows(vil, dl) %>% filter(!is.na(m)) %>%
-  ggplot(aes(factor(tiempo), m, fill = site)) +
-  geom_col(position = position_dodge(0.8), width = 0.75) +
-  geom_errorbar(aes(ymin = m - sd, ymax = m + sd),
-                position = position_dodge(0.8), width = 0.25) +
-  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
-  facet_grid(panel ~ trt, scales = "free_y") +
-  scale_fill_manual(values = col_site, name = "Sitio") +
-  labs(x = "Tiempo", y = NULL) + tema
-p_vil_delta
-ggsave(file.path(carpeta_out, "Ca_viladrau_y_delta.png"), p_vil_delta, width = 9, height = 6, dpi = 300)
+# ================================================================================================================================================================================================================================#
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+#                      .   *   .                                                  *   .     .      *.   * 
+#                   .-.  \_/  .-.                                            *  .  .    *   *   .   *    *  .
+#                  (   `-(o)-'   )   *.                                               .   .  .     * 
+#                   `-.  / \  .-'   /
+#                      `'| |'`     *                                               
+#                        | |
+#             (\/)  (*) _| |_ (*)  (\/)                   
+#              \/    |         |    \/
+#            .,\|.,,.|,,_____,,|.,,.|/,.
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
+# ================================================================================================================================================================================================================================#
