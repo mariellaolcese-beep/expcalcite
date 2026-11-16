@@ -25,6 +25,7 @@ codificacion <- "UTF-8"
 M_Ca         <- 40.078           # g/mol: ppm (mg/L) / M_Ca = mM
 dias_inc     <- 1                # incubación de 24 h
 stage_plot   <- "final"          # etapa para el gráfico de masas
+trt_plot     <- "Wet"            # tratamiento de las figuras (Wet o Dry)
 col_site     <- c(A = "#B4532A", B = "#2F6F73")
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
@@ -100,7 +101,7 @@ ca <- ca %>%
     p2_V_OL_ini_mL = Vild_total_g,
     p2_V_PW_ini_mL = water_sed_init_mL,
     p2_V_OL_fin_mL = g_OL,
-    p2_V_PW_fin_mL = sed_ST_g - Sed_dry_g,   # agua de poro total teórica (sedimento húmedo - seco)
+    p2_V_PW_fin_mL = sed_ST_g - g_OL - Sed_dry_g,   # agua de poro TOTAL = (sedimento + OL + agua de poro) - OL - sedimento seco
 
     # PASO 3: ENTRADA de Ca por compartimento (mmol) = mM * mL / 1000
     p3_Ca_in_OL_mmol    = p1_Ca_vd_mM    * p2_V_OL_ini_mL / 1000,
@@ -187,99 +188,81 @@ delta_t
 #                                                                                                         5. GRÁFICOS
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 tema <- theme_minimal(base_size = 12) +
-  theme(panel.grid.minor = element_blank(), strip.text = element_text(face = "bold"),
-        legend.position = "bottom")
+  theme(panel.grid.minor = element_blank(), strip.text = element_text(face = "bold", size = 12),
+        legend.position = "bottom", plot.title = element_text(face = "bold"),
+        panel.spacing = unit(1.2, "lines"))
 
-# 5a. Masas por compartimento: entrada y final (frascos de stage_plot) y neto total
-masas <- resumen %>% filter(stage == stage_plot) %>%
-  select(tiempo, site, trt,
-         `Entrada OL (Viladrau)`      = p3_Ca_in_OL_mmol__m,
-         `Final OL`                   = p4_Ca_fin_OL_mmol__m,
-         `Entrada PW (agua sedimento)`= p3_Ca_in_PW_mmol__m,
-         `Final PW`                   = p4_Ca_fin_PW_mmol__m,
-         `Neto total (observado)`     = p5_Ca_neto_total_obs_mmol__m,
-         `Neto total (corregido)`     = p5_Ca_neto_total_mmol__m) %>%
-  pivot_longer(-c(tiempo, site, trt), names_to = "masa", values_to = "mmol") %>%
-  mutate(masa = factor(masa, levels = c("Entrada OL (Viladrau)", "Final OL", "Entrada PW (agua sedimento)",
-                                        "Final PW", "Neto total (observado)", "Neto total (corregido)")))
-p_masas <- ggplot(masas, aes(factor(tiempo), mmol, fill = masa)) +
-  geom_col(position = position_dodge(width = 0.85), width = 0.8) +
-  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
-  facet_grid(trt ~ site, labeller = label_both) +
-  scale_fill_manual(values = c("#9DB8B9", "#2F6F73", "#E3D5B8", "#B08A3E", "#D9A48C", "#B4532A"), name = NULL) +
-  labs(x = "Tiempo", y = "Ca (mmol por frasco)", subtitle = paste("Frascos", stage_plot)) + tema
-p_masas
+# Resumen por tiempo, sitio, tratamiento, etapa y capa: promedio y SD entre réplicas
+comp_vars <- c(OL = "p5_Ca_neto_OL_mmol", PW = "p5_Ca_neto_PW_mmol", Total = "p5_Ca_neto_total_mmol")
 
-# 5b. Neto por compartimento (final - entrada) de los frascos initial y final
-neto_comp <- resumen %>%
-  select(tiempo, stage, site, trt, `OL` = p5_Ca_neto_OL_mmol__m, `PW` = p5_Ca_neto_PW_mmol__m,
-         `Total` = p5_Ca_neto_total_mmol__m) %>%
-  pivot_longer(c(OL, PW, Total), names_to = "compartimento", values_to = "mmol") %>%
-  mutate(compartimento = factor(compartimento, levels = c("OL", "PW", "Total")))
-p_neto <- ggplot(neto_comp, aes(factor(tiempo), mmol, fill = compartimento)) +
-  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
-  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
-  facet_grid(trt + stage ~ site, labeller = label_both) +
-  scale_fill_manual(values = c(OL = "#9DB8B9", PW = "#D8C8A8", Total = "#B4532A"), name = NULL) +
-  labs(x = "Tiempo", y = "Ca neto = final - entrada (mmol por frasco)",
-       subtitle = "En los frascos initial el neto debería ser ~0: si no, hay un desajuste sistemático") + tema
-p_neto
+est <- ca %>%
+  pivot_longer(all_of(unname(comp_vars)), names_to = "var", values_to = "mmol") %>%
+  mutate(capa = factor(names(comp_vars)[match(var, comp_vars)], levels = c("OL", "PW", "Total"))) %>%
+  group_by(tiempo, site, trt, stage, capa) %>%
+  summarise(n = sum(!is.na(mmol)), m = mean(mmol, na.rm = TRUE), sd = sd(mmol, na.rm = TRUE),
+            .groups = "drop")
 
-# 5c. Delta final - inicial por compartimento (con SD entre réplicas)
-delta_larga <- delta_t %>%
-  select(tiempo, site, trt, ends_with("__m"), ends_with("__sd")) %>%
-  select(tiempo, site, trt, starts_with("p8_dCa_")) %>%
-  pivot_longer(starts_with("p8_dCa_"), names_to = c("compartimento", "est"),
-               names_pattern = "p8_dCa_(OL|PW|total)_mmol__(m|sd)", values_to = "v") %>%
-  pivot_wider(names_from = est, values_from = v) %>%
-  mutate(compartimento = factor(compartimento, levels = c("OL", "PW", "total"),
-                                labels = c("OL", "PW", "Total")))
-p_delta <- ggplot(delta_larga, aes(factor(tiempo), m, fill = compartimento)) +
-  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
-  geom_errorbar(aes(ymin = m - sd, ymax = m + sd), position = position_dodge(width = 0.8), width = 0.25) +
-  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
-  facet_grid(trt ~ site, labeller = label_both) +
-  scale_fill_manual(values = c(OL = "#9DB8B9", PW = "#D8C8A8", Total = "#B4532A"), name = NULL) +
-  labs(x = "Time", y = "Δ Ca final - inicial (mmol / 24 h)",
-       subtitle = "Ca: OL, PW y total") + tema
-p_delta
+# Delta final - initial con SD COMBINADA (cuenta la dispersión de los dos grupos, no solo la del final)
+#   delta = promedio_final - promedio_initial   (es igual a promediar los deltas por frasco)
+#   SD del delta = raiz( SD_final^2 + SD_initial^2 )
+delta_est <- est %>%
+  pivot_wider(names_from = stage, values_from = c(n, m, sd)) %>%
+  mutate(d            = m_final - m_initial,
+         d_sd         = sqrt(sd_final^2 + sd_initial^2),
+         distinguible = abs(d) > 2 * d_sd) %>%
+  filter(!is.na(d))
 
-# 5d. Viladrau añadida (masa de Ca) y delta del neto (baseline = initial)
-vil <- ca %>% filter(stage == "final") %>%
-  group_by(tiempo, site, trt) %>%
-  summarise(m = mean(p3_Ca_in_OL_mmol, na.rm = TRUE),
-            sd = sd(p3_Ca_in_OL_mmol, na.rm = TRUE), .groups = "drop") %>%
-  mutate(panel = "Ca añadido con Viladrau (mmol por frasco)")
+dod <- position_dodge(width = 0.25)
 
-dl <- delta_t %>%
-  transmute(tiempo, site, trt, m = p8_dCa_total_mmol__m, sd = p8_dCa_total_mmol__sd,
-            panel = "Δ Ca neto final − initial (mmol por frasco en 24 h)")
+# FIGURA 1. Evolución a largo plazo: neto de los frascos INITIAL (estado antes de cada incubación de 24 h)
+p_fig1 <- est %>%
+  filter(trt == trt_plot, stage == "initial", !is.na(m), !is.nan(m)) %>%
+  ggplot(aes(tiempo, m, color = site, group = site)) +
+  geom_hline(yintercept = 0, color = "grey60", linewidth = 0.3) +
+  geom_line(position = dod, linewidth = 0.6) +
+  geom_point(position = dod, size = 2.2) +
+  geom_errorbar(aes(ymin = m - sd, ymax = m + sd), position = dod, width = 0.2, linewidth = 0.4) +
+  facet_wrap(~ capa, nrow = 1, scales = "free_y") +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_color_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = "Ca neto = final - entrada (mmol por frasco)",
+       title = paste0("Evolución del Ca a largo plazo (", trt_plot, ")"),
+       subtitle = "Frascos initial, antes de la incubación de 24 h",
+       caption = "Puntos = promedio de las réplicas; barras = SD entre réplicas") +
+  tema
+p_fig1
 
-p_vil_delta <- bind_rows(vil, dl) %>% filter(!is.na(m)) %>%
-  ggplot(aes(factor(tiempo), m, fill = site)) +
-  geom_col(position = position_dodge(0.8), width = 0.75) +
-  geom_errorbar(aes(ymin = m - sd, ymax = m + sd),
-                position = position_dodge(0.8), width = 0.25) +
-  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
-  facet_grid(panel ~ trt, scales = "free_y") +
-  scale_fill_manual(values = col_site, name = "Sitio") +
-  labs(x = "Tiempo", y = NULL) + tema
-p_vil_delta
+# FIGURA 2. Efecto de la incubación corta: delta final - initial (por 24 h)
+p_fig2 <- delta_est %>%
+  filter(trt == trt_plot) %>%
+  ggplot(aes(tiempo, d, color = site)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.4) +
+  geom_errorbar(aes(ymin = d - d_sd, ymax = d + d_sd), position = dod, width = 0.2, linewidth = 0.4) +
+  geom_point(position = dod, size = 2.6) +
+  facet_wrap(~ capa, nrow = 1, scales = "free_y") +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_color_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = "Δ Ca final - initial (mmol en 24 h)",
+       title = paste0("Efecto de la incubación de 24 h en el Ca (", trt_plot, ")"),
+       subtitle = "Si la barra cruza la línea de 0, el cambio no se distingue del ruido",
+       caption = "Puntos = promedio final - promedio initial; barras = SD combinada de initial y final") +
+  tema
+p_fig2
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 #                                                                                                         6. GUARDAR (CSV)
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 dir.create(carpeta_out, showWarnings = FALSE, recursive = TRUE)
 
-ggsave(file.path(carpeta_out, "Ca_viladrau_y_delta.png"),     p_vil_delta, width = 9,  height = 6, dpi = 300)
-ggsave(file.path(carpeta_out, "Ca_masas.png"),                p_masas,     width = 11, height = 6, dpi = 300)
-ggsave(file.path(carpeta_out, "Ca_neto_compartimentos.png"),  p_neto,      width = 10, height = 9, dpi = 300)
-ggsave(file.path(carpeta_out, "Ca_delta_compartimentos.png"), p_delta,     width = 10, height = 6, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("Ca_fig1_evolucion_", trt_plot, ".png")), p_fig1, width = 10, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("Ca_fig2_delta_", trt_plot, ".png")),     p_fig2, width = 10, height = 4.5, dpi = 300)
 
+write_csv(ca, file.path(carpeta_out, "1_Ca_paso_a_paso_por_frasco.csv"))
 write_csv(final %>% select(sample_id, tiempo, site, trt, rep, starts_with("p8_"), starts_with("p9_")),
           file.path(carpeta_out, "2_delta_final_inicial_por_frasco.csv"))
 write_csv(resumen, file.path(carpeta_out, "3_resumen_por_tiempo_y_etapa.csv"))
 write_csv(delta_t, file.path(carpeta_out, "4_delta_por_tiempo.csv"))
+write_csv(delta_est, file.path(carpeta_out, "5_delta_por_tiempo_SD_combinada.csv"))
 
 diccionario <- tribble(
   ~columna, ~paso, ~que_es,
@@ -287,7 +270,7 @@ diccionario <- tribble(
   "p2_V_OL_ini_mL", "2", "Viladrau total puesta en el frasco (Vild_total_g: 30 mL + reposiciones semanales)",
   "p2_V_PW_ini_mL", "2", "Agua del sedimento inicial (water_sed_init_mL)",
   "p2_V_OL_fin_mL", "2", "Agua suprayacente al sacrificar (g_OL)",
-  "p2_V_PW_fin_mL", "2", "Agua de poro total al sacrificar = sed_ST_g - Sed_init_dry_g",
+  "p2_V_PW_fin_mL", "2", "Agua de poro total al sacrificar = sed_ST_g - g_OL - Sed_init_dry_g",
   "p3_Ca_in_*_mmol", "3", "Ca de ENTRADA (mmol) = mM x mL / 1000. OL = Viladrau; PW = agua del sedimento inicial",
   "p4_Ca_fin_*_mmol", "4", "Ca FINAL CORREGIDO (mmol) = mM x volumen TEORICO (toda el agua de poro)",
   "p4_Ca_fin_*_obs_mmol", "4", "Ca FINAL OBSERVADO (mmol) = mM x volumen realmente extraido (g_PW)",
