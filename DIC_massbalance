@@ -1,0 +1,280 @@
+# =====================================================================
+# Balance de masa de DIC por compartimento y total
+# Archivo: C:/Experimentcalcite/data/planilla_total.csv
+#
+# Compartimentos 
+#   OL = agua suprayacente   (entrada: Viladrau total añadido)
+#   PW = agua de poro        (entrada: agua del sedimento inicial)
+# Lógica:
+#   ENTRADA_comp = DIC (mM) x volumen (mL) / 1000 = mmol
+#   FINAL_comp   = DIC medido en ST (mM) x volumen (mL) / 1000
+#   NETO_comp    = FINAL_compartimento - ENTRADA_compartimento
+#   NETO_total   = NETO_OL + NETO_PW   (solo si hay dato en los dos compartimentos)
+#   DELTA        = NETO del frasco final - NETO medio de los frascos initial
+#                  (mismo tiempo, sitio y tratamiento)
+# =====================================================================
+
+library(tidyverse)
+
+# ---------------------------------------------------------------------
+# 0. AJUSTES
+# ---------------------------------------------------------------------
+archivo      <- "C:/Experimentcalcite/data/planilla_total.csv"
+carpeta_out  <- "C:/Experimentcalcite/resultados"
+codificacion <- "UTF-8"          
+horas_inc    <- 24               # incubación de 24 h
+excluir_DIC_negativo <- TRUE     # un DIC negativo no existe: se trata como dato que falta
+stage_plot   <- "final"
+col_site     <- c(A = "#B4532A", B = "#2F6F73")
+
+# ---------------------------------------------------------------------
+# 1. LEER Y LIMPIAR
+# ---------------------------------------------------------------------
+num <- function(x) suppressWarnings(as.numeric(gsub(",", ".", as.character(x))))
+# suma que da NA si falta cualquiera de los dos (evita totales incompletos)
+suma_estricta <- function(a, b) if_else(is.na(a) | is.na(b), NA_real_, a + b)
+
+primera <- readLines(archivo, n = 1, warn = FALSE, encoding = codificacion)
+sep <- if (grepl(";", primera)) ";" else if (grepl("\t", primera)) "\t" else ","
+pl <- read_delim(archivo, delim = sep, col_types = cols(.default = col_character()),
+                 locale = locale(encoding = codificacion), na = c("", "NA"), show_col_types = FALSE)
+
+necesarias <- c("sample_id", "extraction_time", "stage", "treatment", "site",
+                "Sed_init_dry_g", "water_sed_init_mL", "g_OL", "g_PW", "sed_ST_g", "Vild_total_g",
+                "DIC_OL_mM", "DIC_PW_mM", "sd_DIC_OL", "sd_DIC_PW",
+                "DIC_viladrau_mM", "DIC_initial_sed_mM")
+faltan <- setdiff(necesarias, names(pl))
+if (length(faltan) > 0) stop("Faltan columnas en la planilla: ", paste(faltan, collapse = ", "))
+
+dic <- pl %>%
+  transmute(
+    sample_id,
+    tiempo = as.integer(gsub("\\D", "", extraction_time)),
+    stage  = factor(tolower(stage), levels = c("initial", "final")),
+    trt    = factor(treatment, levels = c("Dry", "Wet")),
+    site   = factor(site, levels = c("A", "B")),
+    rep    = as.integer(str_extract(sample_id, "\\d+$")),
+    # --- volúmenes y masas (
+    Sed_dry_g         = num(Sed_init_dry_g),
+    sed_ST_g          = num(sed_ST_g),
+    g_OL              = num(g_OL),
+    g_PW              = num(g_PW),            # agua de poro extracted
+    Vild_total_g      = num(Vild_total_g),
+    water_sed_init_mL = num(water_sed_init_mL),
+    # --- DIC medido (mM) ---
+    DIC_vil_mM   = num(DIC_viladrau_mM),
+    DIC_sedw_mM  = num(DIC_initial_sed_mM),
+    DIC_OL_mM    = num(DIC_OL_mM),
+    DIC_PW_mM    = num(DIC_PW_mM),
+    sd_DIC_OL    = num(sd_DIC_OL),
+    sd_DIC_PW    = num(sd_DIC_PW)
+  ) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage))   # quita filas vacías
+
+# DIC negativo = dato inválido (se avisa y, si se pide, se deja como NA)
+negativos <- dic %>% filter(DIC_OL_mM < 0 | DIC_PW_mM < 0) %>%
+  select(sample_id, DIC_OL_mM, DIC_PW_mM)
+if (nrow(negativos) > 0) {
+  message("Frascos con DIC negativo (revisar el dato bruto):")
+  print(negativos)
+}
+if (excluir_DIC_negativo) {
+  dic <- dic %>% mutate(
+    DIC_OL_mM = if_else(DIC_OL_mM < 0, NA_real_, DIC_OL_mM),
+    DIC_PW_mM = if_else(DIC_PW_mM < 0, NA_real_, DIC_PW_mM),
+    sd_DIC_OL = if_else(sd_DIC_OL < 0, NA_real_, sd_DIC_OL),
+    sd_DIC_PW = if_else(sd_DIC_PW < 0, NA_real_, sd_DIC_PW)
+  )
+}
+
+# Si falta el DIC del Viladrau o del agua del sedimento, usa la media de su grupo
+dic <- dic %>%
+  group_by(site, trt) %>%
+  mutate(DIC_sedw_mM = coalesce(DIC_sedw_mM, mean(DIC_sedw_mM, na.rm = TRUE))) %>%
+  ungroup() %>%
+  mutate(DIC_vil_mM = coalesce(DIC_vil_mM, mean(DIC_vil_mM, na.rm = TRUE)))
+
+# ---------------------------------------------------------------------
+# 2. PASO A PASO POR FRASCO
+# ---------------------------------------------------------------------
+dic <- dic %>% mutate(
+  # PASO 2. Volúmenes (mL, 1 g de agua = 1 mL)
+  p2_V_OL_ini_mL = Vild_total_g,                       # Viladrau total puesto (30 mL + reposiciones)
+  p2_V_PW_ini_mL = water_sed_init_mL,                  # agua del sedimento inicial
+  p2_V_OL_fin_mL = g_OL,                               # agua suprayacente al sacrificar
+  p2_V_PW_fin_mL = sed_ST_g - g_OL - Sed_dry_g,        # TODA el agua de poro al sacrificar
+  
+  # PASO 3. ENTRADA de DIC por compartimento (mmol) = mM x mL / 1000
+  p3_DIC_in_OL_mmol    = DIC_vil_mM  * p2_V_OL_ini_mL / 1000,
+  p3_DIC_in_PW_mmol    = DIC_sedw_mM * p2_V_PW_ini_mL / 1000,
+  p3_DIC_in_total_mmol = p3_DIC_in_OL_mmol + p3_DIC_in_PW_mmol,
+  
+  # PASO 4. FINAL de DIC por compartimento (mmol)
+  p4_DIC_fin_OL_mmol      = DIC_OL_mM * p2_V_OL_fin_mL / 1000,
+  p4_DIC_fin_PW_mmol      = DIC_PW_mM * p2_V_PW_fin_mL / 1000,   # volumen TOTAL de agua de poro
+  p4_DIC_fin_PW_obs_mmol  = DIC_PW_mM * g_PW / 1000,             # volumen extraído (versión observada)
+  p4_DIC_fin_total_mmol   = suma_estricta(p4_DIC_fin_OL_mmol, p4_DIC_fin_PW_mmol),
+  
+  # PASO 5. NETO = FINAL - ENTRADA, por compartimento y total (NA si falta algún compartimento)
+  p5_DIC_neto_OL_mmol    = p4_DIC_fin_OL_mmol - p3_DIC_in_OL_mmol,
+  p5_DIC_neto_PW_mmol    = p4_DIC_fin_PW_mmol - p3_DIC_in_PW_mmol,
+  p5_DIC_neto_total_mmol = suma_estricta(p5_DIC_neto_OL_mmol, p5_DIC_neto_PW_mmol),
+  
+  # PASO 6. Incertidumbre analítica del DIC final (de las desviaciones sd_DIC_*), en mmol
+  p6_DIC_u_fin_OL_mmol = sd_DIC_OL * p2_V_OL_fin_mL / 1000,
+  p6_DIC_u_fin_PW_mmol = sd_DIC_PW * p2_V_PW_fin_mL / 1000,
+  p6_DIC_u_fin_total_mmol = sqrt(p6_DIC_u_fin_OL_mmol^2 + p6_DIC_u_fin_PW_mmol^2)
+)
+
+# Revisión
+dic %>% filter(is.na(p5_DIC_neto_total_mmol)) %>%
+  select(sample_id, DIC_OL_mM, DIC_PW_mM, p2_V_PW_fin_mL) %>% print(n = 20)    # datos que faltan
+dic %>% filter(p2_V_PW_fin_mL < 0 | p2_V_PW_fin_mL > 40) %>%
+  select(sample_id, p2_V_PW_fin_mL, sed_ST_g, g_OL)                           # volumen raro
+
+# ---------------------------------------------------------------------
+# 3. DELTA FINAL - INICIAL (PASO 8) POR FRASCO FINAL
+# ---------------------------------------------------------------------
+vars_neto <- c("p5_DIC_neto_OL_mmol", "p5_DIC_neto_PW_mmol", "p5_DIC_neto_total_mmol")
+
+base_I <- dic %>% filter(stage == "initial") %>%
+  group_by(tiempo, site, trt) %>%
+  summarise(n_initial = n(),
+            across(all_of(vars_neto), ~ mean(.x, na.rm = TRUE), .names = "{.col}_I"),
+            .groups = "drop")
+
+final <- dic %>% filter(stage == "final") %>%
+  left_join(base_I, by = c("tiempo", "site", "trt")) %>%
+  mutate(
+    p8_dDIC_OL_mmol    = p5_DIC_neto_OL_mmol    - p5_DIC_neto_OL_mmol_I,
+    p8_dDIC_PW_mmol    = p5_DIC_neto_PW_mmol    - p5_DIC_neto_PW_mmol_I,
+    p8_dDIC_total_mmol = p5_DIC_neto_total_mmol - p5_DIC_neto_total_mmol_I,
+    
+    # PASO 9. Tasa por hora (y por g de sedimento seco)
+    p9_tasa_DIC_mmol_h   = p8_dDIC_total_mmol / horas_inc,
+    p9_tasa_DIC_umol_g_h = p9_tasa_DIC_mmol_h * 1000 / Sed_dry_g
+  )
+
+# ---------------------------------------------------------------------
+# 4. PROMEDIO ENTRE RÉPLICAS POR TIEMPO
+# ---------------------------------------------------------------------
+vars_resumen <- c("p3_DIC_in_OL_mmol", "p3_DIC_in_PW_mmol", "p4_DIC_fin_OL_mmol", "p4_DIC_fin_PW_mmol", vars_neto)
+resumen <- dic %>%
+  group_by(tiempo, stage, site, trt) %>%
+  summarise(n = n(),
+            across(all_of(vars_resumen), list(m = ~ mean(.x, na.rm = TRUE), sd = ~ sd(.x, na.rm = TRUE),
+                                              n = ~ sum(!is.na(.x))),
+                   .names = "{.col}__{.fn}"), .groups = "drop")
+
+delta_t <- final %>%
+  group_by(tiempo, site, trt) %>%
+  summarise(n_final = n(), n_initial = first(n_initial),
+            across(c(p8_dDIC_OL_mmol, p8_dDIC_PW_mmol, p8_dDIC_total_mmol,
+                     p9_tasa_DIC_mmol_h, p9_tasa_DIC_umol_g_h),
+                   list(m = ~ mean(.x, na.rm = TRUE), sd = ~ sd(.x, na.rm = TRUE),
+                        n = ~ sum(!is.na(.x))),
+                   .names = "{.col}__{.fn}"), .groups = "drop") %>%
+  mutate(p8_distinguible = abs(p8_dDIC_total_mmol__m) > 2 * p8_dDIC_total_mmol__sd)
+delta_t
+
+# ---------------------------------------------------------------------
+# 5. GRÁFICOS
+# ---------------------------------------------------------------------
+tema <- theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(), strip.text = element_text(face = "bold"),
+        legend.position = "bottom")
+
+# 5a. Neto por compartimento (final - entrada) de los frascos initial y final
+neto_comp <- resumen %>%
+  select(tiempo, stage, site, trt, `OL` = p5_DIC_neto_OL_mmol__m, `PW` = p5_DIC_neto_PW_mmol__m,
+         `Total` = p5_DIC_neto_total_mmol__m) %>%
+  pivot_longer(c(OL, PW, Total), names_to = "compartimento", values_to = "mmol") %>%
+  mutate(compartimento = factor(compartimento, levels = c("OL", "PW", "Total"))) %>%
+  filter(!is.nan(mmol), !is.na(mmol))
+p_neto <- ggplot(neto_comp, aes(factor(tiempo), mmol, fill = compartimento)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
+  facet_grid(trt + stage ~ site, labeller = label_both) +
+  scale_fill_manual(values = c(OL = "#9DB8B9", PW = "#D8C8A8", Total = "#B4532A"), name = NULL) +
+  labs(x = "Tiempo", y = "DIC neto = final - entrada (mmol por frasco)",
+       subtitle = "El neto arrastra la historia acumulada de reposiciones: se interpreta el delta") + tema
+p_neto
+
+# 5b. Delta final - inicial por compartimento (con SD entre réplicas)
+delta_larga <- delta_t %>%
+  select(tiempo, site, trt, starts_with("p8_dDIC_")) %>%
+  select(tiempo, site, trt, matches("__(m|sd)$")) %>%
+  pivot_longer(-c(tiempo, site, trt), names_to = c("compartimento", "est"),
+               names_pattern = "p8_dDIC_(OL|PW|total)_mmol__(m|sd)", values_to = "v") %>%
+  pivot_wider(names_from = est, values_from = v) %>%
+  mutate(compartimento = factor(compartimento, levels = c("OL", "PW", "total"),
+                                labels = c("OL", "PW", "Total"))) %>%
+  filter(!is.nan(m), !is.na(m))
+p_delta <- ggplot(delta_larga, aes(factor(tiempo), m, fill = compartimento)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  geom_errorbar(aes(ymin = m - sd, ymax = m + sd), position = position_dodge(width = 0.8), width = 0.25) +
+  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
+  facet_grid(trt ~ site, labeller = label_both) +
+  scale_fill_manual(values = c(OL = "#9DB8B9", PW = "#D8C8A8", Total = "#B4532A"), name = NULL) +
+  labs(x = "Tiempo", y = "Δ DIC final - initial (mmol / 24 h)",
+       subtitle = "DIC del agua: OL, PW y total (sin CO2 del espacio de cabeza)") + tema
+p_delta
+
+# 5c. DIC añadido con Viladrau y delta total
+vil <- dic %>% filter(stage == "final") %>%
+  group_by(tiempo, site, trt) %>%
+  summarise(m = mean(p3_DIC_in_OL_mmol, na.rm = TRUE),
+            sd = sd(p3_DIC_in_OL_mmol, na.rm = TRUE), .groups = "drop") %>%
+  mutate(panel = "Viladrau añadido")
+
+dl <- delta_t %>%
+  transmute(tiempo, site, trt, m = p8_dDIC_total_mmol__m, sd = p8_dDIC_total_mmol__sd,
+            panel = "Δ neto (final − initial)")
+
+p_vil_delta <- bind_rows(vil, dl) %>% filter(!is.na(m), !is.nan(m)) %>%
+  ggplot(aes(factor(tiempo), m, fill = site)) +
+  geom_col(position = position_dodge(0.8), width = 0.75) +
+  geom_errorbar(aes(ymin = m - sd, ymax = m + sd),
+                position = position_dodge(0.8), width = 0.25) +
+  geom_hline(yintercept = 0, color = "grey40", linewidth = 0.3) +
+  facet_grid(panel ~ trt, scales = "free_y",
+             labeller = labeller(panel = label_wrap_gen(14), trt = label_value)) +
+  scale_fill_manual(values = col_site, name = "Sitio") +
+  labs(x = "Tiempo (muestreo)", y = "DIC (mmol por frasco)",
+       subtitle = "Δ neto: por 24 h, baseline = promedio de frascos initial") + tema
+p_vil_delta
+
+# ---------------------------------------------------------------------
+# 6. GUARDAR (CSV con TODOS los pasos + diccionario de columnas)
+# ---------------------------------------------------------------------
+dir.create(carpeta_out, showWarnings = FALSE, recursive = TRUE)
+ggsave(file.path(carpeta_out, "DIC_neto_compartimentos.png"),  p_neto,      width = 10, height = 9, dpi = 300)
+ggsave(file.path(carpeta_out, "DIC_delta_compartimentos.png"), p_delta,     width = 10, height = 6, dpi = 300)
+ggsave(file.path(carpeta_out, "DIC_viladrau_y_delta.png"),     p_vil_delta, width = 9,  height = 6, dpi = 300)
+
+write_csv(dic, file.path(carpeta_out, "DIC_1_paso_a_paso_por_frasco.csv"))
+write_csv(final %>% select(sample_id, tiempo, site, trt, rep, starts_with("p8_"), starts_with("p9_")),
+          file.path(carpeta_out, "DIC_2_delta_final_inicial_por_frasco.csv"))
+write_csv(resumen, file.path(carpeta_out, "DIC_3_resumen_por_tiempo_y_etapa.csv"))
+write_csv(delta_t, file.path(carpeta_out, "DIC_4_delta_por_tiempo.csv"))
+
+diccionario <- tribble(
+  ~columna, ~paso, ~que_es,
+  "DIC_*_mM", "1", "DIC medido en mM (mmol/L), sin conversion. vil = Viladrau, sedw = agua del sedimento inicial, OL, PW = al sacrificar",
+  "p2_V_OL_ini_mL", "2", "Viladrau total puesto en el frasco (Vild_total_g: 30 mL + reposiciones semanales)",
+  "p2_V_PW_ini_mL", "2", "Agua del sedimento inicial (water_sed_init_mL)",
+  "p2_V_OL_fin_mL", "2", "Agua suprayacente al sacrificar (g_OL)",
+  "p2_V_PW_fin_mL", "2", "Agua de poro total al sacrificar = sed_ST_g - g_OL - Sed_init_dry_g",
+  "p3_DIC_in_*_mmol", "3", "DIC de ENTRADA (mmol) = mM x mL / 1000. OL = Viladrau; PW = agua del sedimento inicial",
+  "p4_DIC_fin_OL_mmol", "4", "DIC FINAL del OL = DIC_OL_mM x g_OL / 1000",
+  "p4_DIC_fin_PW_mmol", "4", "DIC FINAL del PW con volumen TOTAL de agua de poro",
+  "p4_DIC_fin_PW_obs_mmol", "4", "DIC FINAL del PW con volumen realmente extraido (g_PW), version observada",
+  "p4_DIC_fin_total_mmol", "4", "OL + PW (NA si falta alguno de los dos)",
+  "p5_DIC_neto_*_mmol", "5", "NETO = FINAL - ENTRADA por compartimento; total = OL + PW. Arrastra la historia acumulada de reposiciones",
+  "p6_DIC_u_fin_*_mmol", "6", "Incertidumbre analitica del DIC final (sd_DIC x volumen / 1000); no incluye la de la entrada",
+  "p8_dDIC_*_mmol", "8", "DELTA = NETO del frasco final - NETO medio de los frascos initial del mismo tiempo, sitio y tratamiento",
+  "p9_tasa_DIC_mmol_h", "9", "Delta total / 24 h (mmol por frasco y hora)",
+  "p9_tasa_DIC_umol_g_h", "9", "Tasa por g de sedimento seco (umol por g y hora)"
+)
+write_csv(diccionario, file.path(carpeta_out, "DIC_0_diccionario_de_columnas.csv"))
+
