@@ -1,0 +1,499 @@
+# =====================================================================================================
+#  BALANCE DE CARBONO TOTAL Y DE 13C  ->  DISOLUCIÓN DE CALCITA vs RESPIRACIÓN
+#  Archivo: C:/Experimentcalcite/data/planilla_total.csv
+# =====================================================================================================
+#
+#    Para cada frasco calcula cuánto carbono (C) y cuánto 13C entró y cuánto hay al final,
+#    y con la diferencia (final - entrada) reparte el cambio entre
+#       - DISOLUCIÓN de calcita (trae mucho 13C, porque la calcita está marcada), y
+#       - RESPIRACIÓN (trae carbono "natural", con poco 13C).
+#
+#  LA MISMA LÓGICA QUE EN EL Ca Y EL DIC:
+#    ENTRADA = lo que se puso en el frasco
+#    FINAL   = lo que se midió al sacrificarlo
+#    NETO    = FINAL - ENTRADA
+#    DELTA   = NETO de los frascos "final" - NETO medio de los frascos "initial" (mismo tiempo, sitio y
+#              tratamiento). El delta cancela lo que ocurre en las semanas previas y deja solo el
+#              efecto de las 24 h de incubación.
+#
+#  COMPARTIMENTOS:
+#    OL  = agua suprayacente   (entrada: Viladrau añadido en total)
+#    PW  = agua de poro        (entrada: agua del sedimento inicial)
+#    CO2 = CO2 del headspace (no tiene entrada: se cuenta tal cual al final)
+#
+#  UNIDADES: todo en µmol.  Conversion: mM x mL = µmol   (1 mmol/L x 1 mL = 1 µmol)
+#
+#  ISÓTOPOS:
+#    R = R_VPDB x (1 + d13C/1000)      razón 13C/12C
+#    F = R / (1 + R)                   fracción de 13C sobre el C total
+#    13C (µmol) = C total (µmol) x F       y       12C = C total x (1 - F)
+#
+#  CÓMO SE REPARTE EL NETO (disolución vs respiración):
+#    neto_C    = disolución + respiración
+#    neto_13C  = disolución x F_calcita + respiración x F_respiración
+#    => disolución = (neto_13C - neto_C x F_resp) / (F_calc - F_resp)
+#       respiración = neto_C - disolución
+# =====================================================================================================
+
+library(tidyverse)
+
+# -----------------------------------------------------------------------------------------------------
+#  0. AJUSTES 
+# -----------------------------------------------------------------------------------------------------
+archivo      <- "C:/Experimentcalcite/data/planilla_total.csv"
+carpeta_out  <- "C:/Experimentcalcite/resultados"
+codificacion <- "UTF-8"
+# # # #  codificacion <- "latin1"          #cuando no quiere empieza a poner signos raros en mis columnas
+
+R_VPDB <- 0.0111802              # razón 13C/12C del estándar VPDB
+
+# δ13C de la CALCITA que se disuelve, por sitio (‰). PROVISIONAL: son los valores esperados por LOI.
+# >>> CAMBIAR AQUÍ cuando llegue el valor real del 13PIC. Estos son los esperados segun los mg que puse, despues quizas poner todo aqui. <<<
+d13C_calcita <- c(A = 446, B = 349)
+
+# δ13C del carbono que aporta la respiración (‰). Valor típico de materia orgánica; no está medido, usaremos este, pero debo confirmar valor
+d13C_resp <- -25
+
+horas_inc <- 24                  # short-term
+excluir_DIC_negativo <- TRUE     # un DIC negativo no existe: se trata como dato que falta
+trt_plot  <- "Wet"               # tratamiento que se dibuja en las figuras principales (Wet o Dry)
+mostrar_en_pantalla <- TRUE      # TRUE = las figuras principales se dibujan en el panel Plots 
+mostrar_extra       <- FALSE     # TRUE = dibuja además las figuras de apoyo (pares, 13C, disolución/respiración, gas)
+M_Ca <- 40.078                   # g/mol: ppm (mg/L) / M_Ca = mM de Ca
+col_site  <- c(A = "#B4532A", B = "#2F6F73")
+##### cambiar estos colores que me sangran los ojos
+# -----------------------------------------------------------------------------------------------------
+#  1. FUNCIONES AUXILIARES
+# -----------------------------------------------------------------------------------------------------
+# convierte texto con coma decimal a número
+num <- function(x) suppressWarnings(as.numeric(gsub(",", ".", as.character(x))))
+
+# δ13C (‰) -> fracción de 13C (F)
+F_desde_d <- function(d) {
+  R <- R_VPDB * (1 + d / 1000)
+  R / (1 + R)
+}
+
+# suma que da NA si falta CUALQUIERA de los términos (evita "totales" incompletos)
+suma_estricta <- function(a, b, c = 0) if_else(is.na(a) | is.na(b) | is.na(c), NA_real_, a + b + c)
+
+# elige la primera columna que exista entre varios nombres posibles
+col_primera <- function(df, candidatos) {
+  hit <- intersect(candidatos, names(df))
+  if (length(hit) == 0) stop("No encuentro ninguna de estas columnas: ", paste(candidatos, collapse = " / "))
+  hit[1]
+}
+
+# -----------------------------------------------------------------------------------------------------
+#  2. LEER Y LIMPIAR LA PLANILLA
+# -----------------------------------------------------------------------------------------------------
+lineas <- readLines(archivo, n = 20, warn = FALSE, encoding = codificacion)
+fila_header <- grep("sample_id", lineas)[1]
+if (is.na(fila_header)) stop("No se encontró 'sample_id' en las primeras 20 líneas del archivo.")
+
+linea_hdr <- lineas[fila_header]
+sep <- if (grepl(";", linea_hdr)) ";" else if (grepl("\t", linea_hdr)) "\t" else ","
+
+pl <- read_delim(archivo, delim = sep, skip = fila_header - 1,
+                 col_types = cols(.default = col_character()),
+                 locale = locale(encoding = codificacion),
+                 na = c("", "NA"), show_col_types = FALSE)
+pl <- pl[, !grepl("^\\.\\.\\.[0-9]+$", names(pl))]       # quita columnas sin nombre
+
+# el δ13C del CO2 puede llamarse de dos formas 
+col_d_co2 <- col_primera(pl, c("13_CO2_δ", "13_CO2"))
+
+necesarias <- c("sample_id", "extraction_time", "stage", "treatment", "site",
+                "Sed_init_dry_g", "water_sed_init_mL", "g_OL", "sed_ST_g", "Vild_total_g",
+                "DIC_OL_mM", "DIC_PW_mM", "DIC_viladrau_mM", "DIC_initial_sed_mM",
+                "13DIC_viladrau_δ", "13DIC_initial_water_sed", "13DIC_OL_δ", "13DIC_PW_δ",
+                "mmol de CO2",
+                "Ca_OL_ppm", "Ca_PW_ppm", "Ca_vd_ppm", "Ca_pwsed_ppm")
+faltan <- setdiff(necesarias, names(pl))
+if (length(faltan) > 0) stop("Faltan columnas en la planilla: ", paste(faltan, collapse = ", "))
+
+cc <- pl %>%
+  transmute(
+    sample_id,
+    tiempo = as.integer(gsub("\\D", "", extraction_time)),
+    stage  = factor(tolower(stage), levels = c("initial", "final")),
+    trt    = factor(treatment, levels = c("Dry", "Wet")),
+    site   = factor(site, levels = c("A", "B")),
+    rep    = as.integer(str_extract(sample_id, "\\d+$")),
+    # masas y volúmenes
+    Sed_dry_g         = num(Sed_init_dry_g),
+    sed_ST_g          = num(sed_ST_g),
+    g_OL              = num(g_OL),
+    Vild_total_g      = num(Vild_total_g),
+    water_sed_init_mL = num(water_sed_init_mL),
+    # DIC medido (mM = mmol/L)
+    DIC_vil_mM  = num(DIC_viladrau_mM),
+    DIC_sedw_mM = num(DIC_initial_sed_mM),
+    DIC_OL_mM   = num(DIC_OL_mM),
+    DIC_PW_mM   = num(DIC_PW_mM),
+    # δ13C del DIC (‰)
+    d_vil  = num(`13DIC_viladrau_δ`),
+    d_sedw = num(`13DIC_initial_water_sed`),
+    d_OL   = num(`13DIC_OL_δ`),
+    d_PW   = num(`13DIC_PW_δ`),
+    # CO2 del headspace
+    mmol_CO2 = num(`mmol de CO2`),
+    # Ca medido (ppm)
+    Ca_vd_ppm = num(Ca_vd_ppm), Ca_pwsed_ppm = num(Ca_pwsed_ppm),
+    Ca_OL_ppm = num(Ca_OL_ppm), Ca_PW_ppm = num(Ca_PW_ppm),
+    d_CO2    = num(.data[[col_d_co2]])
+  ) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage))     # quita filas vacías
+
+# DIC negativo = dato inválido: se avisa y (si se pide) se deja como NA
+negativos <- cc %>% filter(DIC_OL_mM < 0 | DIC_PW_mM < 0) %>% select(sample_id, DIC_OL_mM, DIC_PW_mM)
+if (nrow(negativos) > 0) {
+  message("Frascos con DIC negativo (revisar el dato bruto):")
+  print(negativos)
+}
+if (excluir_DIC_negativo) {
+  cc <- cc %>% mutate(DIC_OL_mM = if_else(DIC_OL_mM < 0, NA_real_, DIC_OL_mM),
+                      DIC_PW_mM = if_else(DIC_PW_mM < 0, NA_real_, DIC_PW_mM))
+}
+
+# Si falta el DIC del agua del sedimento en un frasco, se usa la media de su grupo, CORROBORAR QUE ESTO ESTA OK O SI ES MEJOR ELIMINAR TOT
+cc <- cc %>%
+  group_by(site, trt) %>%
+  mutate(DIC_sedw_mM = coalesce(DIC_sedw_mM, mean(DIC_sedw_mM, na.rm = TRUE)),
+         d_sedw      = coalesce(d_sedw,      mean(d_sedw,      na.rm = TRUE)),
+         Ca_pwsed_ppm = coalesce(Ca_pwsed_ppm, mean(Ca_pwsed_ppm, na.rm = TRUE))) %>%
+  ungroup() %>%
+  mutate(DIC_vil_mM = coalesce(DIC_vil_mM, mean(DIC_vil_mM, na.rm = TRUE)),
+         d_vil      = coalesce(d_vil,      mean(d_vil,      na.rm = TRUE)),
+         Ca_vd_ppm  = coalesce(Ca_vd_ppm,  mean(Ca_vd_ppm,  na.rm = TRUE)))
+
+# -----------------------------------------------------------------------------------------------------
+#  3. PASO A PASO POR FRASCO
+# -----------------------------------------------------------------------------------------------------
+cc <- cc %>% mutate(
+  # PASO 1. PASAR A F, Fracción de 13C (F) de cada reserva, a partir de su δ13C
+  p1_F_vil  = F_desde_d(d_vil),
+  p1_F_sedw = F_desde_d(d_sedw),
+  p1_F_OL   = F_desde_d(d_OL),
+  p1_F_PW   = F_desde_d(d_PW),
+  p1_F_CO2  = F_desde_d(d_CO2),
+  
+  # PASO 2. Volúmenes (mL; 1 g de agua = 1 mL)
+  p2_V_OL_ini_mL = Vild_total_g,                       # Viladrau total puesto (30 mL + reposiciones)
+  p2_V_PW_ini_mL = water_sed_init_mL,                  # agua del sedimento inicial
+  p2_V_OL_fin_mL = g_OL,                               # agua suprayacente al sacrificar
+  p2_V_PW_fin_mL = sed_ST_g - g_OL - Sed_dry_g,        # TODA el agua de poro (volumen "corregido")
+  
+  # PASO 3. ENTRADA (µmol).  mM x mL = µmol
+  p3_C_in_OL_umol  = DIC_vil_mM  * p2_V_OL_ini_mL,
+  p3_C_in_PW_umol  = DIC_sedw_mM * p2_V_PW_ini_mL,
+  p3_C_in_total_umol = p3_C_in_OL_umol + p3_C_in_PW_umol,                 # = C_in_umol del Excel
+  p3_C13_in_OL_umol  = p3_C_in_OL_umol * p1_F_vil,                        # 13C que trae el Viladrau
+  p3_C13_in_PW_umol  = p3_C_in_PW_umol * p1_F_sedw,                       # 13C del agua del sedimento
+  p3_C13_in_total_umol = p3_C13_in_OL_umol + p3_C13_in_PW_umol,           # = 13DIC_total_add del Excel
+  
+  # PASO 4. FINAL (µmol), por compartimento
+  p4_C_fin_OL_umol  = DIC_OL_mM * p2_V_OL_fin_mL,
+  p4_C_fin_PW_umol  = DIC_PW_mM * p2_V_PW_fin_mL,
+  p4_C_fin_CO2_umol = mmol_CO2 * 1000,
+  p4_C13_fin_OL_umol  = p4_C_fin_OL_umol  * p1_F_OL,
+  p4_C13_fin_PW_umol  = p4_C_fin_PW_umol  * p1_F_PW,
+  p4_C13_fin_CO2_umol = p4_C_fin_CO2_umol * p1_F_CO2,
+  p4_C12_fin_CO2_umol = p4_C_fin_CO2_umol * (1 - p1_F_CO2),               # 12C del CO2 (control)
+  
+  # PASO 5. NETO = FINAL - ENTRADA.  El CO2 no tiene entrada: su neto es lo que hay.
+  #         El TOTAL solo se calcula si están los tres compartimentos (si no, NA).
+  p5_C_neto_OL    = p4_C_fin_OL_umol - p3_C_in_OL_umol,
+  p5_C_neto_PW    = p4_C_fin_PW_umol - p3_C_in_PW_umol,
+  p5_C_neto_CO2   = p4_C_fin_CO2_umol,
+  p5_C_neto_Total = suma_estricta(p5_C_neto_OL, p5_C_neto_PW, p5_C_neto_CO2),   # = C_neto_umol del Excel
+  
+  p5_C13_neto_OL    = p4_C13_fin_OL_umol - p3_C13_in_OL_umol,
+  p5_C13_neto_PW    = p4_C13_fin_PW_umol - p3_C13_in_PW_umol,
+  p5_C13_neto_CO2   = p4_C13_fin_CO2_umol,
+  p5_C13_neto_Total = suma_estricta(p5_C13_neto_OL, p5_C13_neto_PW, p5_C13_neto_CO2), # = 13C_neto_umol del Excel
+  
+  # PASO 6. REPARTO del neto: disolución vs respiración (ver la explicación de arriba)
+  p6_F_calc = unname(F_desde_d(d13C_calcita)[as.character(site)]),       # F de la calcita de SU sitio
+  p6_F_resp = F_desde_d(d13C_resp),
+  p6_disolucion_umol  = (p5_C13_neto_Total - p5_C_neto_Total * p6_F_resp) / (p6_F_calc - p6_F_resp),
+  p6_respiracion_umol = p5_C_neto_Total - p6_disolucion_umol,
+  
+  # PASO 6b. REPARTO SOLO CON EL GAS (CO2 del espacio de cabeza).
+  #   Los Dry de t1 a t4 no tienen agua medida, así que no se puede hacer el reparto con el agua.
+  #   Con el CO2 sí: se aplica la misma fórmula usando solo el CO2 (su "neto" es lo que hay).
+  #   Se calcula igual para Dry y Wet, así que la comparación entre tratamientos es justa.
+  #   LIMITACIÓN: ignora el DIC que queda en el agua (en los Dry no está medido), por eso es PARCIAL.
+  p6g_disolucion_umol  = (p5_C13_neto_CO2 - p5_C_neto_CO2 * p6_F_resp) / (p6_F_calc - p6_F_resp),
+  p6g_respiracion_umol = p5_C_neto_CO2 - p6g_disolucion_umol
+)
+
+# --- Comprobación con el frasco t0I-AD1 (debe dar lo mismo que el Excel) --- ####ACA NO TENGO QUE VERIFICAR MANUAL, NO LO HE HECHO
+cat("\nCOMPROBACIÓN t0I-AD1  (Excel: C_in 199,05 | C_fin 182,82 | C_neto -16,23 | 13C_fin 2,04 | 13C_neto -0,13)\n")
+cc %>% filter(sample_id == "t0I-AD1") %>%
+  transmute(C_in = p3_C_in_total_umol, C_fin = p4_C_fin_OL_umol + p4_C_fin_PW_umol + p4_C_fin_CO2_umol,
+            C_neto = p5_C_neto_Total, C13_in = p3_C13_in_total_umol,
+            C13_fin = p4_C13_fin_OL_umol + p4_C13_fin_PW_umol + p4_C13_fin_CO2_umol,
+            C13_neto = p5_C13_neto_Total) %>% print()
+
+# --- Revisión: frascos a los que les falta algún dato (su total queda en NA) ---
+cc %>% filter(is.na(p5_C13_neto_Total)) %>%
+  select(sample_id, DIC_OL_mM, DIC_PW_mM, mmol_CO2, d_CO2) %>% print(n = 20)
+# --- Revisión: F fuera de rango (debe estar cerca de 0,011) ---
+cc %>% filter(p1_F_CO2 > 0.02 | p1_F_CO2 < 0.005 | p1_F_OL > 0.02 | p1_F_PW > 0.02) %>%
+  select(sample_id, d_OL, d_PW, d_CO2) %>% print()
+
+# -----------------------------------------------------------------------------------------------------
+#  4. RESUMEN POR TIEMPO (promedio y SD entre réplicas) Y DELTA FINAL - INITIAL
+# -----------------------------------------------------------------------------------------------------
+# resumir(): promedio, SD y n por tiempo, sitio, tratamiento, etapa y compartimento
+resumir <- function(df, vars) {
+  df %>%
+    select(tiempo, site, trt, stage, all_of(unname(vars))) %>%
+    pivot_longer(all_of(unname(vars)), names_to = "var", values_to = "v") %>%
+    mutate(capa = factor(names(vars)[match(var, vars)], levels = names(vars))) %>%
+    group_by(tiempo, site, trt, stage, capa) %>%
+    summarise(n = sum(!is.na(v)), m = mean(v, na.rm = TRUE), sd = sd(v, na.rm = TRUE), .groups = "drop") %>%
+    filter(!is.nan(m))
+}
+
+# delta_de(): delta = promedio_final - promedio_initial;  SD combinada = raíz(SD_final^2 + SD_initial^2)
+delta_de <- function(est) {
+  est %>%
+    pivot_wider(names_from = stage, values_from = c(n, m, sd)) %>%
+    mutate(d            = m_final - m_initial,
+           d_sd         = sqrt(sd_final^2 + sd_initial^2),
+           distinguible = abs(d) > 2 * d_sd) %>%
+    filter(!is.na(d))
+}
+
+# --- Ca (solo las aguas), en µmol para poder compararlo con el carbono (1 Ca : 1 C si es disolución de calcita) ---
+#   mM x mL = µmol. Entrada: OL = Viladrau; PW = agua del sedimento. Final: OL y PW (volumen total) al sacrificar.
+cc <- cc %>% mutate(
+  pCa_in_umol   = (Ca_vd_ppm / M_Ca) * p2_V_OL_ini_mL + (Ca_pwsed_ppm / M_Ca) * p2_V_PW_ini_mL,
+  pCa_fin_umol  = (Ca_OL_ppm / M_Ca) * p2_V_OL_fin_mL + (Ca_PW_ppm / M_Ca) * p2_V_PW_fin_mL,
+  pCa_neto_umol = pCa_fin_umol - pCa_in_umol            # NETO = FINAL - ENTRADA (aguas)
+)
+
+vars_C   <- c(OL = "p5_C_neto_OL",   PW = "p5_C_neto_PW",   CO2 = "p5_C_neto_CO2",   Total = "p5_C_neto_Total")
+vars_C13 <- c(OL = "p5_C13_neto_OL", PW = "p5_C13_neto_PW", CO2 = "p5_C13_neto_CO2", Total = "p5_C13_neto_Total")
+vars_rep <- c(Disolución = "p6_disolucion_umol", Respiración = "p6_respiracion_umol")
+
+est_C   <- resumir(cc, vars_C)     ; delta_C   <- delta_de(est_C)
+est_Ca  <- resumir(cc, c(Ca = "pCa_neto_umol"))
+est_C13 <- resumir(cc, vars_C13)   ; delta_C13 <- delta_de(est_C13)
+est_rep <- resumir(cc, vars_rep)   ; delta_rep <- delta_de(est_rep)
+
+vars_gas <- c(Disolución = "p6g_disolucion_umol", Respiración = "p6g_respiracion_umol")
+est_gas  <- resumir(cc, vars_gas)  ; delta_gas <- delta_de(est_gas)       # Dry y Wet juntos
+
+cat("\nDELTA del reparto (µmol de C por 24 h) - disolución y respiración:\n")
+delta_rep %>% filter(trt == trt_plot) %>%
+  select(tiempo, site, capa, d, d_sd, distinguible) %>% arrange(capa, site, tiempo) %>% print(n = 40)
+
+# -----------------------------------------------------------------------------------------------------
+#  5. GRÁFICOS
+#     Fig 1  = evolución a largo plazo (frascos initial)
+#     Fig 2  = incubación de 24 h: initial y final unidos por una línea
+#     Fig 2b = el delta directamente, con SD combinada (se ve qué cruza el 0)
+#     Se repiten para el C total y para el 13C; y el reparto va en su propia figura.
+# -----------------------------------------------------------------------------------------------------
+tema <- theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(), strip.text = element_text(face = "bold", size = 12),
+        legend.position = "bottom", plot.title = element_text(face = "bold"),
+        panel.spacing = unit(1.2, "lines"))
+
+eje_t <- scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4))
+dod   <- position_dodge(width = 0.25)
+
+fig_largo <- function(est, ylab, titulo) {
+  est %>% filter(trt == trt_plot, stage == "initial") %>%
+    ggplot(aes(tiempo, m, color = site, group = site)) +
+    geom_hline(yintercept = 0, color = "grey60", linewidth = 0.3) +
+    geom_line(position = dod, linewidth = 0.6) +
+    geom_point(position = dod, size = 2.2) +
+    geom_errorbar(aes(ymin = m - sd, ymax = m + sd), position = dod, width = 0.2, linewidth = 0.4) +
+    facet_wrap(~ capa, nrow = 1, scales = "free_y") + eje_t +
+    scale_color_manual(values = col_site, name = "Sitio") +
+    labs(x = NULL, y = ylab, title = paste0(titulo, ": largo plazo (", trt_plot, ")"),
+         subtitle = "Frascos initial, antes de la incubación de 24 h",
+         caption = "Puntos = promedio de las réplicas; barras = SD entre réplicas") + tema
+}
+
+fig_pares <- function(delta_est, ylab, titulo) {
+  off <- 0.12
+  dum <- delta_est %>% filter(trt == trt_plot) %>% mutate(x = tiempo + if_else(site == "A", -off, off))
+  pts <- dum %>%
+    select(tiempo, site, capa, x, m_initial, m_final, sd_initial, sd_final) %>%
+    pivot_longer(c(m_initial, m_final, sd_initial, sd_final), names_to = c(".value", "etapa"), names_sep = "_") %>%
+    mutate(etapa = factor(etapa, levels = c("initial", "final")))
+  ggplot() +
+    geom_segment(data = dum, aes(x = x, xend = x, y = m_initial, yend = m_final, color = site), linewidth = 1) +
+    geom_errorbar(data = pts, aes(x = x, ymin = m - sd, ymax = m + sd, color = site),
+                  width = 0.07, linewidth = 0.3, alpha = 0.6) +
+    geom_point(data = pts, aes(x = x, y = m, color = site, shape = etapa), size = 2.8, stroke = 1.1) +
+    facet_wrap(~ capa, nrow = 1, scales = "free_y") + eje_t +
+    scale_color_manual(values = col_site, name = "Sitio") +
+    scale_shape_manual(values = c(initial = 1, final = 16), name = "Etapa") +
+    labs(x = NULL, y = ylab, title = paste0(titulo, ": incubación de 24 h (", trt_plot, ")"),
+         subtitle = "Círculo vacío = initial, círculo lleno = final; la línea es el cambio",
+         caption = "Puntos = promedio de las réplicas; barras = SD entre réplicas") + tema
+}
+
+fig_delta <- function(delta_est, ylab, titulo) {
+  delta_est %>% filter(trt == trt_plot) %>%
+    ggplot(aes(tiempo, d, color = site)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.4) +
+    geom_errorbar(aes(ymin = d - d_sd, ymax = d + d_sd), position = dod, width = 0.2, linewidth = 0.4) +
+    geom_point(position = dod, size = 2.6) +
+    facet_wrap(~ capa, nrow = 1, scales = "free_y") + eje_t +
+    scale_color_manual(values = col_site, name = "Sitio") +
+    labs(x = NULL, y = ylab, title = paste0(titulo, ": delta final - initial (", trt_plot, ")"),
+         subtitle = "Si la barra cruza la línea de 0, el cambio no se distingue del ruido",
+         caption = "Puntos = promedio final - promedio initial; barras = SD combinada de initial y final") + tema
+}
+
+# Delta con Dry y Wet en filas distintas (para comparar tratamientos)
+fig_delta_trt <- function(delta_est, ylab, titulo) {
+  delta_est %>%
+    ggplot(aes(tiempo, d, color = site)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.4) +
+    geom_errorbar(aes(ymin = d - d_sd, ymax = d + d_sd), position = dod, width = 0.2, linewidth = 0.4) +
+    geom_point(position = dod, size = 2.6) +
+    facet_grid(trt ~ capa, scales = "free_y") + eje_t +
+    scale_color_manual(values = col_site, name = "Sitio") +
+    labs(x = NULL, y = ylab, title = titulo,
+         subtitle = "Solo con el CO2 del espacio de cabeza (parcial: no incluye el DIC del agua)",
+         caption = "Puntos = promedio final - promedio initial; barras = SD combinada de initial y final") + tema
+}
+
+p_C_1   <- fig_largo(est_C,   "C neto = final - entrada (µmol por frasco)",  "Carbono total")
+p_C_2   <- fig_pares(delta_C, "C neto = final - entrada (µmol por frasco)",  "Carbono total")
+p_C_2b  <- fig_delta(delta_C, "Δ C final - initial (µmol en 24 h)",          "Carbono total")
+p_13_1  <- fig_largo(est_C13,   "13C neto = final - entrada (µmol por frasco)", "13C")
+p_13_2  <- fig_pares(delta_C13, "13C neto = final - entrada (µmol por frasco)", "13C")
+p_13_2b <- fig_delta(delta_C13, "Δ 13C final - initial (µmol en 24 h)",         "13C")
+p_rep   <- fig_delta(delta_rep, "Δ carbono final - initial (µmol de C en 24 h)",
+                     paste0("Disolución y respiración (calcita A=", d13C_calcita["A"], " B=", d13C_calcita["B"],
+                            " ‰, provisional)"))
+p_gas <- fig_delta_trt(delta_gas, "Δ C del CO2 final - initial (µmol en 24 h)",
+                       "Disolución y respiración con el gas: Dry y Wet")
+
+# FIGURA DE COMPARACIÓN: disolución (C) vs Ca, largo plazo (frascos initial), mismas unidades (µmol por frasco)
+#   Si todo fuese disolución de calcita, las dos líneas deberían coincidir (1 Ca : 1 C).
+#   OJO: el C de disolución a largo plazo arrastra la historia de desgasificación (solo el delta de 24 h es más limpio).
+comp <- bind_rows(
+  est_Ca  %>% mutate(serie = "Ca neto (aguas)"),
+  est_rep %>% filter(capa == "Disolución") %>% mutate(serie = "C de disolución (13C)")
+) %>% filter(trt == trt_plot, stage == "initial")
+
+p_comp <- comp %>%
+  ggplot(aes(tiempo, m, color = serie, group = serie)) +
+  geom_hline(yintercept = 0, color = "grey60", linewidth = 0.3) +
+  geom_line(position = dod, linewidth = 0.7) +
+  geom_point(position = dod, size = 2.4) +
+  geom_errorbar(aes(ymin = m - sd, ymax = m + sd), position = dod, width = 0.2, linewidth = 0.4) +
+  facet_wrap(~ site, nrow = 1, labeller = labeller(site = c(A = "A - Centre (MO baja)", B = "B - Cua (MO alta)"))) +
+  eje_t +
+  scale_color_manual(values = c("Ca neto (aguas)" = "#1F4E79", "C de disolución (13C)" = "#C8791A"), name = NULL) +
+  labs(x = NULL, y = "µmol por frasco (final - entrada)",
+       title = paste0("Disolución (C) vs Ca a largo plazo (", trt_plot, ")"),
+       subtitle = "Si es disolución de calcita, Ca y C deberían coincidir (1:1)",
+       caption = "Frascos initial; puntos = promedio de réplicas; barras = SD entre réplicas") + tema
+
+# Mostrar las figuras en la pantalla de R
+figuras <- list(p_C_1, p_C_2b, p_comp)                       # principales: 3 MESES, delta, comparación con Ca
+if (mostrar_extra) figuras <- c(figuras, list(p_C_2, p_13_1, p_13_2, p_13_2b, p_rep, p_gas))
+if (mostrar_en_pantalla) for (p in figuras) print(p)
+
+# -----------------------------------------------------------------------------------------------------
+#  6. GUARDAR
+# -----------------------------------------------------------------------------------------------------
+dir.create(carpeta_out, showWarnings = FALSE, recursive = TRUE)
+guarda <- function(p, nombre, ancho = 11, alto = 4.5)
+  ggsave(file.path(carpeta_out, paste0(nombre, "_", trt_plot, ".png")), p, width = ancho, height = alto, dpi = 300)
+
+guarda(p_C_1,  "C_fig1_largo_plazo")
+guarda(p_C_2,  "C_fig2_incubacion")
+guarda(p_C_2b, "C_fig2b_delta")
+guarda(p_13_1,  "C13_fig1_largo_plazo")
+guarda(p_13_2,  "C13_fig2_incubacion")
+guarda(p_13_2b, "C13_fig2b_delta")
+guarda(p_rep,   "C13_fig3_disolucion_respiracion", ancho = 8)
+guarda(p_comp, "C13_fig5_comparacion_disolucion_vs_Ca", ancho = 9)
+ggsave(file.path(carpeta_out, "C13_fig4_solo_gas_Dry_y_Wet.png"), p_gas, width = 8, height = 6, dpi = 300)
+
+write_csv(cc,        file.path(carpeta_out, "C13_1_paso_a_paso_por_frasco.csv"))
+write_csv(delta_C,   file.path(carpeta_out, "C13_2_delta_carbono_total.csv"))
+write_csv(delta_C13, file.path(carpeta_out, "C13_3_delta_13C.csv"))
+write_csv(delta_rep, file.path(carpeta_out, "C13_4_delta_disolucion_respiracion.csv"))
+write_csv(est_Ca %>% bind_rows(est_rep %>% filter(capa == "Disolución") %>% mutate(capa = factor("Disolución"))) %>% mutate(capa = as.character(capa)), file.path(carpeta_out, "C13_6_Ca_vs_disolucion_largo_plazo.csv"))
+write_csv(delta_gas, file.path(carpeta_out, "C13_5_delta_solo_gas_Dry_y_Wet.csv"))
+
+diccionario <- tribble(
+  ~columna, ~paso, ~que_es,
+  "p1_F_*", "1", "Fracción de 13C (F = R/(1+R), R = R_VPDB x (1+δ/1000)) de Viladrau (vil), agua del sedimento (sedw), OL, PW y CO2",
+  "p2_V_*_mL", "2", "Volúmenes: OL inicial = Vild_total_g; PW inicial = water_sed_init_mL; OL final = g_OL; PW final = sed_ST_g - g_OL - Sed_init_dry_g",
+  "p3_C_in_*_umol", "3", "Carbono de ENTRADA (µmol) = DIC (mM) x volumen (mL). OL = Viladrau; PW = agua del sedimento",
+  "p3_C13_in_*_umol", "3", "13C de ENTRADA (µmol) = C de entrada x F. El total es la columna 13DIC_total_add del Excel",
+  "p4_C_fin_*_umol", "4", "Carbono FINAL (µmol) de OL, PW (volumen total) y CO2 del espacio de cabeza",
+  "p4_C13_fin_*_umol", "4", "13C FINAL (µmol) = C final x F",
+  "p4_C12_fin_CO2_umol", "4", "12C del CO2 (control) = C x (1 - F)",
+  "p5_C_neto_*", "5", "NETO de carbono = final - entrada (CO2: sin entrada). Total solo si están los tres compartimentos",
+  "p5_C13_neto_*", "5", "NETO de 13C = final - entrada. Total solo si están los tres compartimentos",
+  "p6_F_calc / p6_F_resp", "6", "F de la calcita (de su sitio, provisional) y F del carbono respirado",
+  "p6_disolucion_umol", "6", "C que viene de disolución de calcita = (neto13C - netoC x F_resp)/(F_calc - F_resp). Solo se interpreta su DELTA",
+  "p6_respiracion_umol", "6", "C que viene de respiración = neto C - disolución. Solo se interpreta su DELTA",
+  "p6g_disolucion_umol / p6g_respiracion_umol", "6b", "Reparto usando SOLO el CO2 del espacio de cabeza (parcial). Sirve para los Dry sin agua medida; se interpreta su DELTA",
+  "pCa_in_umol / pCa_fin_umol / pCa_neto_umol", "Ca", "Ca de las aguas en µmol (ppm/40,078 x mL): entrada, final y neto. Para comparar con el C de disolución",
+  "d, d_sd, distinguible", "delta", "Delta final - initial, su SD combinada y TRUE si |delta| > 2 x SD"
+)
+write_csv(diccionario, file.path(carpeta_out, "C13_0_diccionario_de_columnas.csv"))
+
+# ---- DISPERSIÓN: Ca (x) vs C de disolución (y), línea 1:1 ----
+# a) LARGO PLAZO (frascos initial): arrastra la desgasificación acumulada
+lp <- bind_rows(est_Ca  %>% mutate(serie = "Ca"),
+                est_rep %>% filter(capa == "Disolución") %>% mutate(serie = "C")) %>%
+  filter(trt == trt_plot, stage == "initial") %>%
+  select(tiempo, site, serie, m, sd) %>%
+  pivot_wider(names_from = serie, values_from = c(m, sd))
+
+p_disp_lp <- ggplot(lp, aes(m_Ca, m_C, color = site)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey40") +
+  geom_hline(yintercept = 0, color = "grey70", linewidth = 0.3) +
+  geom_vline(xintercept = 0, color = "grey70", linewidth = 0.3) +
+  geom_errorbar(aes(ymin = m_C - sd_C, ymax = m_C + sd_C), width = 0, linewidth = 0.4) +
+  geom_errorbarh(aes(xmin = m_Ca - sd_Ca, xmax = m_Ca + sd_Ca), height = 0, linewidth = 0.4) +
+  geom_point(size = 3) +
+  geom_text(aes(label = paste0("t", tiempo)), vjust = -1, show.legend = FALSE, size = 3.5) +
+  scale_color_manual(values = col_site, name = "Sitio") +
+  labs(x = "Ca neto (µmol por frasco)", y = "C de disolución (µmol por frasco)",
+       title = paste0("Disolución vs Ca, largo plazo (", trt_plot, ")"),
+       subtitle = "Línea discontinua = 1:1. Cada punto es un tiempo (t0-t4)",
+       caption = "Frascos initial; barras = SD entre réplicas") + tema
+
+# b) DELTA DE 24 h (final - initial): comparación más limpia
+delta_Ca <- delta_de(est_Ca)
+d24 <- bind_rows(delta_Ca  %>% mutate(serie = "Ca"),
+                 delta_rep %>% filter(capa == "Disolución") %>% mutate(serie = "C")) %>%
+  filter(trt == trt_plot) %>%
+  select(tiempo, site, serie, d, d_sd) %>%
+  pivot_wider(names_from = serie, values_from = c(d, d_sd))
+
+p_disp_24 <- ggplot(d24, aes(d_Ca, d_C, color = site)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey40") +
+  geom_hline(yintercept = 0, color = "grey70", linewidth = 0.3) +
+  geom_vline(xintercept = 0, color = "grey70", linewidth = 0.3) +
+  geom_errorbar(aes(ymin = d_C - d_sd_C, ymax = d_C + d_sd_C), width = 0, linewidth = 0.4) +
+  geom_errorbarh(aes(xmin = d_Ca - d_sd_Ca, xmax = d_Ca + d_sd_Ca), height = 0, linewidth = 0.4) +
+  geom_point(size = 3) +
+  geom_text(aes(label = paste0("t", tiempo)), vjust = -1, show.legend = FALSE, size = 3.5) +
+  scale_color_manual(values = col_site, name = "Sitio") +
+  labs(x = "Δ Ca (µmol en 24 h)", y = "Δ C de disolución (µmol en 24 h)",
+       title = paste0("Disolución vs Ca, incubación de 24 h (", trt_plot, ")"),
+       subtitle = "Línea discontinua = 1:1",
+       caption = "Delta = final - initial; barras = SD combinada") + tema
+
+print(p_disp_lp); print(p_disp_24)
+ggsave(file.path(carpeta_out, "C13_fig6_dispersion_largo_plazo.png"), p_disp_lp, width = 7, height = 6, dpi = 300)
+ggsave(file.path(carpeta_out, "C13_fig7_dispersion_delta24h.png"),    p_disp_24, width = 7, height = 6, dpi = 300)
