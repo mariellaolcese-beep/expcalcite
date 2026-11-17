@@ -1,444 +1,185 @@
-### ============================================================================
-### 1. CARGA DE LIBRERÍAS Y PREPARACIÓN DE DATOS (DIC)
-### ============================================================================
-
-library(dplyr)
-library(tidyr)
-library(car)
-library(emmeans)
-library(ggplot2)
-
-# Cargar el archivo CSV
-dic_data <- read.csv("DIC_R.csv", header = TRUE, sep = ";", dec = ",", check.names = FALSE)
-
-# Limpieza y extracción de variables
-dic_clean <- dic_data %>%
-  select(time, sample, layer, `DIC mM`) %>%
-  mutate(
-    DIC = as.numeric(gsub(",", ".", as.character(`DIC mM`))),
-    STAGE = as.factor(sub("^T\\d+([IF]).*", "\\1", sample)),
-    SITE = as.factor(ifelse(
-      grepl("-[A-Za-z]{2}\\d", sample),
-      sub(".*-([A-Za-z])[A-Za-z]\\d.*", "\\1", sample),
-      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
-    )),
-    TREATMENT = as.factor(ifelse(
-      grepl("-[A-Za-z]{2}\\d", sample),
-      sub(".*-[A-Za-z]([A-Za-z])\\d.*", "\\1", sample),
-      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
-    )),
-    TIME  = as.factor(time),
-    LAYER = as.factor(toupper(layer))
-  ) %>%
-  filter(!is.na(DIC))
-
-
-### ============================================================================
-### 2. VISIÓN GENERAL: TODOS LOS DATOS (GLOBAL)
-### ============================================================================
-
-cat("\n--- Generando Gráfico Global 1: Evolución del DIC (Líneas) ---\n")
-
-plot_dic_lineas_global <- ggplot(dic_clean, 
-                                 aes(x = TIME, y = DIC, color = LAYER, group = LAYER)) +
-  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
-  stat_summary(fun = mean, geom = "point", size = 2.5) +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
-  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
-  labs(
-    title = "DIC vs Time",
-    subtitle = "Comparison OL y PW for Site y Treatment",
-    x = "Tiempo",
-    y = "DIC (mM)",
-    color = "Capa (LAYER)"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
-  )
-
-print(plot_dic_lineas_global)
-
-cat("\n--- Generando Gráfico Global 2: Medidas Individuales de DIC (Puntos) ---\n")
-
-plot_dic_puntos_global <- ggplot(dic_clean, 
-                                 aes(x = TIME, y = DIC, color = LAYER)) +
-  geom_point(
-    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
-    size = 2.5, 
-    alpha = 0.8
-  ) +
-  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
-  labs(
-    title = "Todas las Medidas de DIC por Tiempo (Todos los Datos)",
-    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro) por Sitio y Tratamiento",
-    x = "Tiempo",
-    y = "DIC (mM)",
-    color = "Capa (LAYER)"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
-  )
-
-print(plot_dic_puntos_global)
-
-
-### ============================================================================
-### 3. ETAPA INICIAL (STAGE == 'I')
-### ============================================================================
-
-# --- 3.1 Filtrado de datos ---
-dic_inicial <- dic_clean %>%
-  filter(STAGE == "I")
-
-dic_inicial_W <- dic_inicial %>% 
-  filter(TREATMENT == "W")
-
-# --- 3.2 Análisis Estadístico: Normalidad (Shapiro-Wilk) ---
-shapiro_inicial <- dic_inicial %>%
-  group_by(SITE, LAYER, TREATMENT, TIME) %>%
-  summarise(
-    n = n(),
-    W = ifelse(n >= 3, shapiro.test(DIC)$statistic, NA),
-    p_value = ifelse(n >= 3, shapiro.test(DIC)$p.value, NA),
-    .groups = "drop"
-  ) %>%
-  mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
-
-cat("\n--- Shapiro-Wilk Por Subgrupo (STAGE = 'I') ---\n")
-print(as.data.frame(shapiro_inicial))
-
-# --- 3.3 Homocedasticidad (Levene) por Capa ---
-cat("\n--- Prueba de Levene (STAGE = 'I') ---\n")
-levene_OL_ini <- leveneTest(DIC ~ SITE * TREATMENT * TIME, data = filter(dic_inicial, LAYER == "OL"))
-levene_PW_ini <- leveneTest(DIC ~ SITE * TREATMENT * TIME, data = filter(dic_inicial, LAYER == "PW"))
-
-cat("Agua Sobrenadante (OL) - p-value:", levene_OL_ini$`Pr(>F)`[1], "\n")
-cat("Agua de Poro (PW)         - p-value:", levene_PW_ini$`Pr(>F)`[1], "\n")
-
-# --- 3.4 Modelos ANOVA y Post-Hoc (Tratamiento W) ---
-cat("\n>>> OL (Tratamiento W) - Inicial <<<\n")
-mod_OL_W_ini <- aov(DIC ~ SITE * TIME, data = filter(dic_inicial_W, LAYER == "OL"))
-print(summary(mod_OL_W_ini))
-
-cat("\n--- Tukey (TIME) en OL (W) - Inicial ---\n")
-tukey_OL_W_ini <- emmeans(mod_OL_W_ini, pairwise ~ TIME, adjust = "tukey")
-print(tukey_OL_W_ini$contrasts)
-
-cat("\n>>> PW (Tratamiento W) - Inicial <<<\n")
-mod_PW_W_ini <- aov(DIC ~ SITE * TIME, data = filter(dic_inicial_W, LAYER == "PW"))
-print(summary(mod_PW_W_ini))
-
-cat("\n--- Tukey (TIME) en PW (W) - Inicial ---\n")
-tukey_PW_W_ini <- emmeans(mod_PW_W_ini, pairwise ~ TIME, adjust = "tukey")
-print(tukey_PW_W_ini$contrasts)
-
-# --- 3.5 Visualización de Tratamiento W (Etapa Inicial 'I') ---
-cat("\n--- Generando Gráficos: Etapa Inicial (STAGE I - W) ---\n")
-
-# Gráfico 1: Líneas de medias ± error estándar
-plot_dic_lineas_W_I <- ggplot(dic_inicial_W, 
-                              aes(x = TIME, y = DIC, color = LAYER, group = LAYER)) +
-  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
-  stat_summary(fun = mean, geom = "point", size = 2.5) +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
-  facet_wrap(~ SITE, labeller = labeller(SITE = site_labels)) +
-  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
-  labs(
-    title = "DIC vs time (I)  (W-treatment)",
-    subtitle = "Comparison between OL y PW ",
-    x = "Time",
-    y = "DIC (mM)",
-    color = "LAYER"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
-  )
-
-print(plot_dic_lineas_W_I)
-
-# Gráfico 2: Puntos de mediciones individuales
-plot_dic_puntos_W_I <- ggplot(dic_inicial_W, 
-                              aes(x = TIME, y = DIC, color = LAYER)) +
-  geom_point(
-    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
-    size = 2.5, 
-    alpha = 0.8
-  ) +
-facet_wrap(~ SITE, labeller = labeller(SITE = site_labels)) +
-  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
-  labs(
-    title = "DIC vs Time (I) - (W-treatment)",
-    subtitle = "Measures of OL vs PW",
-    x = "Time",
-    y = "DIC (mM)",
-    color = "LAYER"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
-  )
-
-print(plot_dic_puntos_W_I)
-
-
-### ============================================================================
-### 4. ETAPA FINAL (STAGE == 'F')
-### ============================================================================
-
-# --- 4.1 Filtrado de datos ---
-dic_final <- dic_clean %>%
-  filter(STAGE == "F")
-
-dic_final_W <- dic_final %>% 
-  filter(TREATMENT == "W")
-
-# --- 4.2 Análisis Estadístico: Normalidad (Shapiro-Wilk) ---
-shapiro_final <- dic_final %>%
-  group_by(SITE, LAYER, TREATMENT, TIME) %>%
-  summarise(
-    n = n(),
-    W = ifelse(n >= 3, shapiro.test(DIC)$statistic, NA),
-    p_value = ifelse(n >= 3, shapiro.test(DIC)$p.value, NA),
-    .groups = "drop"
-  ) %>%
-  mutate(Normal = ifelse(p_value > 0.05, "SÍ", "NO"))
-
-cat("\n--- Shapiro-Wilk Por Subgrupo (STAGE = 'F') ---\n")
-print(as.data.frame(shapiro_final))
-
- 4.3 Homocedasticidad (Levene) por Capa ---
-cat("\n--- Prueba de Levene (STAGE = 'F') ---\n")
-levene_OL_fin <- leveneTest(DIC ~ SITE * TREATMENT * TIME, data = filter(dic_final, LAYER == "OL"))
-levene_PW_fin <- leveneTest(DIC ~ SITE * TREATMENT * TIME, data = filter(dic_final, LAYER == "PW"))
-
-cat("Agua Sobrenadante (OL) - p-value:", levene_OL_fin$`Pr(>F)`[1], "\n")
-cat("Agua de Poro (PW)         - p-value:", levene_PW_fin$`Pr(>F)`[1], "\n")
-
-# --- 4.4 Modelos ANOVA y Post-Hoc Completos ---
-cat("\n>>> OL (Modelo Completo) - Final <<<\n")
-mod_OL_fin <- aov(DIC ~ SITE * TREATMENT * TIME, data = filter(dic_final, LAYER == "OL"))
-print(summary(mod_OL_fin))
-
-cat("\n--- Tukey en OL - Final ---\n")
-tukey_OL_fin <- emmeans(mod_OL_fin, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
-print(tukey_OL_fin$contrasts)
-
-cat("\n>>> PW (Modelo Completo) - Final <<<\n")
-mod_PW_fin <- aov(DIC ~ SITE * TREATMENT * TIME, data = filter(dic_final, LAYER == "PW"))
-print(summary(mod_PW_fin))
-
-cat("\n--- Tukey en PW - Final ---\n")
-tukey_PW_fin <- emmeans(mod_PW_fin, pairwise ~ SITE * TREATMENT | TIME, adjust = "tukey")
-print(tukey_PW_fin$contrasts)
-
-# --- 4.5 Visualización de Tratamiento W (Etapa Final 'F') ---
-cat("\n--- Generando Gráficos: Etapa Final (STAGE F - W) ---\n")
-
-# Gráfico 1: Líneas de medias ± error estándar
-plot_dic_lineas_W_F <- ggplot(dic_final_W, 
-                              aes(x = TIME, y = DIC, color = LAYER, group = LAYER)) +
-  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
-  stat_summary(fun = mean, geom = "point", size = 2.5) +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
-  facet_wrap(~ SITE, labeller = labeller(SITE = site_labels)) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
-  labs(
-    title = "Evolución del DIC - Etapa Final (F) - Tratamiento W",
-    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro)",
-    x = "Tiempo",
-    y = "DIC (mM)",
-    color = "Capa (LAYER)"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
-  )
-
-print(plot_dic_lineas_W_F)
-
-# Gráfico 2: Puntos de mediciones individuales
-plot_dic_puntos_W_F <- ggplot(dic_final_W, 
-                              aes(x = TIME, y = DIC, color = LAYER)) +
-  geom_point(
-    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.4),
-    size = 2.5, 
-    alpha = 0.8
-  ) +
-  facet_wrap(~ SITE, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "#1f77b4", "PW" = "#ff7f0e")) +
-  labs(
-    title = "Todas las Medidas de DIC por Tiempo - Etapa Final (F) - Tratamiento W",
-    subtitle = "Mediciones individuales de OL (Agua Sobrenadante) vs PW (Agua de Poro)",
-    x = "Tiempo",
-    y = "DIC (mM)",
-    color = "Capa (LAYER)"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle = element_text(size = 11, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
-  )
-
-print(plot_dic_puntos_W_F)
-
-### ============================================================================
-### 1. CARGA DE LIBRERÍAS Y PREPARACIÓN DE DATOS (DIC & DELTA DIC)
-### ============================================================================
-
-library(dplyr)
-library(tidyr)
-library(car)
-library(emmeans)
-library(ggplot2)
-
-# Cargar el archivo CSV
-dic_data <- read.csv("DIC_R.csv", header = TRUE, sep = ";", dec = ",", check.names = FALSE)
-
-# Limpieza y extracción de variables
-dic_clean <- dic_data %>%
-  select(time, sample, layer, `DIC mM`) %>%
-  mutate(
-    DIC = as.numeric(gsub(",", ".", as.character(`DIC mM`))),
-    STAGE = as.factor(sub("^T\\d+([IF]).*", "\\1", sample)),
-    # Extracción del sitio
-    SITE_raw = ifelse(
-      grepl("-[A-Za-z]{2}\\d", sample),
-      sub(".*-([A-Za-z])[A-Za-z]\\d.*", "\\1", sample),
-      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
-    ),
-    # CORRECCIÓN: Reemplazar 'D' por 'A' según lo solicitado
-    SITE = as.factor(ifelse(SITE_raw == "D", "A", SITE_raw)),
-    
-    TREATMENT = as.factor(ifelse(
-      grepl("-[A-Za-z]{2}\\d", sample),
-      sub(".*-[A-Za-z]([A-Za-z])\\d.*", "\\1", sample),
-      sub(".*-([A-Za-z])\\d.*", "\\1", sample)
-    )),
-    TIME  = as.factor(time),
-    LAYER = as.factor(toupper(layer))
-  ) %>%
-  filter(!is.na(DIC))
-
-# --- CÁLCULO DE DELTA DIC ---
-dic_delta <- dic_clean %>%
-  group_by(SITE, TREATMENT, LAYER, STAGE) %>%
-  mutate(
-    DIC_T0 = mean(DIC[TIME == 0 | TIME == "0" | TIME == "T0"], na.rm = TRUE),
-    DELTA_DIC = DIC - DIC_T0
-  ) %>%
-  ungroup()
-
-
-### ============================================================================
-### 2. VISIÓN GENERAL: DIC GLOBAL (LÍNEAS Y PUNTOS)
-### ============================================================================
-
-cat("\n--- Generando Gráfico Global 1: Evolución del DIC (Líneas) ---\n")
-
-plot_dic_lineas_global <- ggplot(dic_clean, 
-                                 aes(x = TIME, y = DIC, color = LAYER, shape = LAYER, linetype = LAYER, group = LAYER)) +
-  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
-  stat_summary(fun = mean, geom = "point", size = 2.5) +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, color = "black") +
-  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
-  scale_shape_manual(values = c("OL" = 16, "PW" = 17)) +
-  scale_linetype_manual(values = c("OL" = "solid", "PW" = "dashed")) +
-  labs(
-    title = "Evolución General del DIC a través del Tiempo (Sitio D corregido a A)",
-    subtitle = "Comparación entre OL (Agua Sobrenadante) y PW (Agua de Poro) por Sitio y Tratamiento",
-    x = "Tiempo",
-    y = "DIC (mM)",
-    color = "Capa (LAYER)",
-    shape = "Capa (LAYER)",
-    linetype = "Capa (LAYER)"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
-    plot.subtitle = element_text(size = 10, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
-  )
-
-print(plot_dic_lineas_global)
-
-
-### ============================================================================
-### 3. VISIÓN GENERAL: DELTA DIC GLOBAL
-### ============================================================================
-
-cat("\n--- Generando Gráfico Global Delta DIC (Líneas) ---\n")
-
-
-### ============================================================================
-### 4. EJEMPLO DE ANÁLISIS ESTADÍSTICO (ETAPA INICIAL - W)
-### ============================================================================
-
-dic_inicial_W <- dic_clean %>%
-  filter(STAGE == "I" & TREATMENT == "W")
-
-cat("\n>>> OL (Tratamiento W) - Inicial (Con Sitio D recodificado a A) <<<\n")
-mod_OL_W_ini <- aov(DIC ~ SITE * TIME, data = filter(dic_inicial_W, LAYER == "OL"))
-print(summary(mod_OL_W_ini))
-
-cat("\n--- Tukey (TIME) en OL (W) - Inicial ---\n")
-tukey_OL_W_ini <- emmeans(mod_OL_W_ini, pairwise ~ TIME, adjust = "tukey")
-print(tukey_OL_W_ini$contrasts)
-
-plot_delta_lineas_global <- ggplot(dic_delta, 
-                                   aes(x = TIME, y = DELTA_DIC, color = LAYER, shape = LAYER, linetype = LAYER, group = LAYER)) +
-  stat_summary(fun = mean, geom = "line", linewidth = 0.9) +
-  stat_summary(fun = mean, geom = "point", size = 2.5) +
-  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, color = "black") +
-  facet_grid(SITE ~ TREATMENT, labeller = label_both) +
-  scale_color_manual(values = c("OL" = "black", "PW" = "gray50")) +
-  scale_shape_manual(values = c("OL" = 16, "PW" = 17)) +
-  scale_linetype_manual(values = c("OL" = "solid", "PW" = "dashed")) +
-  labs(
-    title = "Delta DIC ",
-    x = "Time",
-    y = "Delta DIC (mM)",
-    color = "LAYER",
-    shape = "LAYER",
-    linetype = "LAYER"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
-    plot.subtitle = element_text(size = 10, hjust = 0.5),
-    axis.title = element_text(face = "bold"),
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "#f0f0f0")
-  )
-
-print(plot_delta_lineas_global)
+# =====================================================================================================
+#  DIC y δ13C-DIC (13DIC): estadística y gráficos, y relación entre ambos
+#  Lee la planilla_total (los mismos nombres de columna que los otros scripts).
+#
+#  Qué hace:
+#   1. Para DIC (mM) y δ13C-DIC (‰): líneas de promedio ± error estándar, OL y PW, por sitio.
+#      Etapa initial = largo plazo (antes de la incubación); final = después de 24 h (otro linetype).
+#   2. Estadística (Shapiro, Levene, ANOVA sitio x tiempo, Tukey entre tiempos) por capa y etapa.
+#   3. Dispersión DIC vs δ13C-DIC, frasco a frasco: ve de qué se mezcla el DIC.
+#   4. (Opcional) cambio respecto a t0.
+#
+#  Qué se corrigió respecto al script anterior:
+#   - Faltaba un "#" en la línea "4.3 Homocedasticidad" (daba error y paraba el script).
+#   - Usaba site_labels sin haberlo definido.
+#   - Estaba la carga de datos duplicada y el gráfico de delta no tenía código previo que funcionara.
+#   - Ahora lee la planilla_total (no DIC_R.csv) para tener DIC y δ13C en el mismo archivo.
+# =====================================================================================================
+library(tidyverse)
+library(car)        # leveneTest
+library(emmeans)    # Tukey
+
+# -----------------------------------------------------------------------------------------------------
+#  0. AJUSTES
+# -----------------------------------------------------------------------------------------------------
+archivo      <- "C:/Experimentcalcite/data/planilla_total.csv"
+carpeta_out  <- "C:/Experimentcalcite/resultados"
+codificacion <- "UTF-8"
+trt_plot     <- "Wet"        # tratamiento que se dibuja y analiza (Wet o Dry; en Dry t1-t4 no hay agua medida)
+con_delta_t0 <- FALSE        # TRUE = añade las figuras de cambio respecto a t0
+col_capa     <- c(OL = "black", PW = "gray50")
+etiq_site    <- c(A = "A - Centre (MO baja)", B = "B - Cua (MO alta)")
+
+# -----------------------------------------------------------------------------------------------------
+#  1. LEER Y ORDENAR LOS DATOS
+# -----------------------------------------------------------------------------------------------------
+num <- function(x) suppressWarnings(as.numeric(gsub(",", ".", as.character(x))))
+
+lineas <- readLines(archivo, n = 20, warn = FALSE, encoding = codificacion)
+fila_header <- grep("sample_id", lineas)[1]
+if (is.na(fila_header)) stop("No se encontró 'sample_id' en las primeras 20 líneas del archivo.")
+linea_hdr <- lineas[fila_header]
+sep <- if (grepl(";", linea_hdr)) ";" else if (grepl("\t", linea_hdr)) "\t" else ","
+
+pl <- read_delim(archivo, delim = sep, skip = fila_header - 1,
+                 col_types = cols(.default = col_character()),
+                 locale = locale(encoding = codificacion),
+                 na = c("", "NA"), show_col_types = FALSE)
+pl <- pl[, !grepl("^\\.\\.\\.[0-9]+$", names(pl))]
+
+necesarias <- c("sample_id", "extraction_time", "stage", "treatment", "site",
+                "DIC_OL_mM", "DIC_PW_mM", "13DIC_OL_δ", "13DIC_PW_δ")
+faltan <- setdiff(necesarias, names(pl))
+if (length(faltan) > 0) stop("Faltan columnas en la planilla: ", paste(faltan, collapse = ", "))
+
+base <- pl %>%
+  transmute(sample_id,
+            tiempo = as.integer(gsub("\\D", "", extraction_time)),
+            stage  = factor(tolower(stage), levels = c("initial", "final")),
+            trt    = factor(treatment, levels = c("Dry", "Wet")),
+            site   = factor(site, levels = c("A", "B")),
+            DIC_OL = num(DIC_OL_mM), DIC_PW = num(DIC_PW_mM),
+            d13_OL = num(`13DIC_OL_δ`), d13_PW = num(`13DIC_PW_δ`)) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage))
+
+# Formato largo: una fila por frasco y capa, con DIC y δ13C-DIC
+datos <- bind_rows(
+  base %>% transmute(sample_id, tiempo, stage, trt, site, capa = "OL", DIC = DIC_OL, d13 = d13_OL),
+  base %>% transmute(sample_id, tiempo, stage, trt, site, capa = "PW", DIC = DIC_PW, d13 = d13_PW)
+) %>%
+  mutate(capa = factor(capa, levels = c("OL", "PW")),
+         DIC  = if_else(DIC < 0, NA_real_, DIC),       # DIC negativo = dato inválido
+         TIME = factor(tiempo, levels = 0:4))
+
+nombres_var <- c(DIC = "DIC (mM)", d13 = "δ13C-DIC (‰)")
+datos_l <- datos %>%
+  pivot_longer(c(DIC, d13), names_to = "var", values_to = "v") %>%
+  mutate(var = factor(nombres_var[var], levels = unname(nombres_var)))
+
+cat("\nFrascos con dato por variable, capa y etapa (", trt_plot, "):\n")
+datos_l %>% filter(trt == trt_plot, !is.na(v)) %>% count(var, capa, stage) %>% print()
+
+# -----------------------------------------------------------------------------------------------------
+#  2. GRÁFICOS DE LÍNEAS: DIC y δ13C-DIC
+# -----------------------------------------------------------------------------------------------------
+tema <- theme_bw(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+        plot.subtitle = element_text(size = 10, hjust = 0.5),
+        axis.title = element_text(face = "bold"), legend.position = "bottom",
+        strip.background = element_rect(fill = "#f0f0f0"))
+eje_t <- scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4))
+
+fig_lineas <- function(var_sel) {
+  datos_l %>% filter(trt == trt_plot, var == var_sel, !is.na(v)) %>%
+    ggplot(aes(tiempo, v, color = capa, shape = capa, linetype = stage, group = interaction(capa, stage))) +
+    stat_summary(fun = mean, geom = "line", linewidth = 0.8) +
+    stat_summary(fun = mean, geom = "point", size = 2.5) +
+    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, linetype = "solid") +
+    facet_wrap(~ site, labeller = labeller(site = etiq_site)) + eje_t +
+    scale_color_manual(values = col_capa, name = "Capa") +
+    scale_shape_manual(values = c(OL = 16, PW = 17), name = "Capa") +
+    scale_linetype_manual(values = c(initial = "solid", final = "dashed"), name = "Etapa") +
+    labs(x = NULL, y = var_sel, title = paste0(var_sel, " (", trt_plot, ")"),
+         subtitle = "Línea continua = initial (largo plazo); discontinua = final (tras 24 h)",
+         caption = "Promedio ± error estándar entre réplicas")  + tema
+}
+p_DIC <- fig_lineas(nombres_var["DIC"])
+p_d13 <- fig_lineas(nombres_var["d13"])
+
+# -----------------------------------------------------------------------------------------------------
+#  3. DISPERSIÓN DIC vs δ13C-DIC (frasco a frasco)
+#     Es la figura que junta ambos: de qué fuentes se mezcla el DIC.
+#     Viladrau (δ ≈ -16 ‰), respiración (≈ -25 ‰) bajan el δ; la disolución de calcita (δ muy positivo) lo sube.
+# -----------------------------------------------------------------------------------------------------
+p_disp <- datos %>%
+  filter(trt == trt_plot, !is.na(DIC), !is.na(d13)) %>%
+  ggplot(aes(DIC, d13, color = capa, shape = stage)) +
+  geom_point(size = 2.6, alpha = 0.85) +
+  facet_wrap(~ site, labeller = labeller(site = etiq_site)) +
+  scale_color_manual(values = col_capa, name = "Capa") +
+  scale_shape_manual(values = c(initial = 1, final = 16), name = "Etapa") +
+  labs(x = "DIC (mM)", y = "δ13C-DIC (‰)",
+       title = paste0("DIC frente a δ13C-DIC (", trt_plot, ")"),
+       subtitle = "Cada punto es un frasco",
+       caption = "Círculo vacío = initial, lleno = final") + tema
+
+# -----------------------------------------------------------------------------------------------------
+#  4. ESTADÍSTICA (por variable, etapa y capa; tratamiento = trt_plot)
+# -----------------------------------------------------------------------------------------------------
+cat("\n================ Shapiro-Wilk por grupo (n >= 3) ================\n")
+datos_l %>% filter(trt == trt_plot, !is.na(v)) %>%
+  group_by(var, site, capa, stage, tiempo) %>%
+  summarise(n = n(), p_shapiro = if (n() >= 3 && length(unique(v)) > 1) shapiro.test(v)$p.value else NA_real_,
+            .groups = "drop") %>%
+  mutate(normal = if_else(p_shapiro > 0.05, "SÍ", "NO")) %>% print(n = Inf)
+
+stats_var <- function(var_sel) {
+  for (et in c("initial", "final")) for (ly in c("OL", "PW")) {
+    d <- datos_l %>% filter(trt == trt_plot, var == var_sel, stage == et, capa == ly, !is.na(v)) %>% droplevels()
+    cat("\n>>>", var_sel, "|", ly, "|", et, "|", trt_plot, "<<<\n")
+    if (nlevels(d$TIME) < 2) { cat("  (menos de 2 tiempos con datos)\n"); next }
+    lev <- tryCatch(leveneTest(v ~ interaction(site, TIME), data = d)$`Pr(>F)`[1], error = function(e) NA)
+    cat("  Levene p =", signif(lev, 3), "\n")
+    mod <- tryCatch(aov(v ~ site * TIME, data = d), error = function(e) NULL)
+    if (is.null(mod)) { cat("  (no se pudo ajustar el ANOVA)\n"); next }
+    print(summary(mod))
+    tk <- tryCatch(emmeans(mod, pairwise ~ TIME, adjust = "tukey")$contrasts, error = function(e) NULL)
+    if (!is.null(tk)) { cat("  Tukey entre tiempos:\n"); print(tk) }
+  }
+}
+for (v in nombres_var) stats_var(v)
+
+# -----------------------------------------------------------------------------------------------------
+#  5. (OPCIONAL) CAMBIO RESPECTO A t0
+#     Resta el promedio de t0 del mismo sitio, tratamiento, capa y etapa. Es "cambio desde el inicio",
+#     no el delta final-initial de 24 h.
+# -----------------------------------------------------------------------------------------------------
+if (con_delta_t0) {
+  datos_t0 <- datos_l %>%
+    group_by(var, site, trt, capa, stage) %>%
+    mutate(cambio_t0 = v - mean(v[tiempo == 0], na.rm = TRUE)) %>% ungroup()
+  p_t0 <- datos_t0 %>% filter(trt == trt_plot, !is.na(cambio_t0)) %>%
+    ggplot(aes(tiempo, cambio_t0, color = capa, shape = capa, linetype = stage, group = interaction(capa, stage))) +
+    geom_hline(yintercept = 0, color = "grey60", linewidth = 0.3) +
+    stat_summary(fun = mean, geom = "line", linewidth = 0.8) +
+    stat_summary(fun = mean, geom = "point", size = 2.5) +
+    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, linetype = "solid") +
+    facet_grid(var ~ site, scales = "free_y", labeller = labeller(site = etiq_site)) + eje_t +
+    scale_color_manual(values = col_capa, name = "Capa") +
+    scale_shape_manual(values = c(OL = 16, PW = 17), name = "Capa") +
+    scale_linetype_manual(values = c(initial = "solid", final = "dashed"), name = "Etapa") +
+    labs(x = NULL, y = "Cambio respecto a t0", title = paste0("Cambio respecto a t0 (", trt_plot, ")")) + tema
+}
+
+# -----------------------------------------------------------------------------------------------------
+#  6. MOSTRAR Y GUARDAR
+# -----------------------------------------------------------------------------------------------------
+print(p_DIC); print(p_d13); print(p_disp)
+if (con_delta_t0) print(p_t0)
+
+dir.create(carpeta_out, showWarnings = FALSE, recursive = TRUE)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig1_DIC_", trt_plot, ".png")),         p_DIC,  width = 9, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig2_d13C_DIC_", trt_plot, ".png")),    p_d13,  width = 9, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig3_dispersion_", trt_plot, ".png")),  p_disp, width = 9, height = 4.5, dpi = 300)
+if (con_delta_t0) ggsave(file.path(carpeta_out, paste0("DIC13_fig4_cambio_t0_", trt_plot, ".png")), p_t0, width = 9, height = 6, dpi = 300)
+write_csv(datos, file.path(carpeta_out, "DIC13_datos_por_frasco_y_capa.csv"))
