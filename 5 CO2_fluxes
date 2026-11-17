@@ -1,0 +1,191 @@
+# =====================================================================================================
+#  FLUJO DE CO2 (espacio de cabeza) + ISÓTOPOS
+#
+#  Qué hace:
+#   Fig 1  Flujo total de CO2 (µmol C m-2 h-1): tu figura de siempre.
+#   Fig 2  Flujo de 13C (nmol 13C m-2 h-1): el mismo cálculo, solo la parte de 13C.
+#   Fig 3  Reparto del flujo con los isótopos: parte que viene de DISOLUCIÓN de calcita y parte de RESPIRACIÓN.
+#
+#  Importante (cambio respecto a tu versión):
+#   Los frascos initial y final son frascos DISTINTOS (t0I-AD1 no es el mismo frasco que t0F-AD1), así que no se
+#   pueden emparejar por sample_id: el delta de cada réplica salía NA. Ahora el flujo se calcula como
+#       delta = promedio de los frascos final - promedio de los frascos initial   (mismo tiempo, sitio y tratamiento)
+#   con SD combinada = raíz(SD_final^2 + SD_initial^2). Cada frasco usa SU volumen de espacio de cabeza.
+#
+#  Reparto (con el CO2 solo; el DIC del agua no entra, por eso es PARCIAL):
+#     D (disolución)   = (N13 - N x F_resp) / (F_calc - F_resp)
+#     Respiración      = N - D
+#     N = µmol de C del CO2; N13 = N x F; F = R/(1+R); R = R_VPDB x (1 + δ/1000)
+# =====================================================================================================
+library(tidyverse)
+
+# -----------------------------------------------------------------------------------------------------
+#  0. AJUSTES
+# -----------------------------------------------------------------------------------------------------
+archivo      <- "C:/Experimentcalcite/data/planilla_total.csv"
+carpeta_out  <- "C:/Experimentcalcite/resultados"
+codificacion <- "UTF-8"
+
+R_VPDB       <- 0.0111802
+d13C_calcita <- c(A = 446, B = 349)      # ‰ PROVISIONAL (LOI de t0I); sustituir por el 13PIC medido
+d13C_resp    <- -25                      # ‰ valor típico de la materia orgánica; no está medido
+
+R_gas    <- 0.0820573     # L*atm/(mol*K)
+T_kelvin <- 298.15        # 25 °C
+P_atm    <- 1.0
+A_sedimento_m2    <- 0.00196   # r = 2,5 cm -> 19,6 cm2
+incubation_time_h <- 24
+
+col_D <- "#B08968"   # Dry
+col_W <- "#4A7C82"   # Wet
+col_trt <- c(Dry = col_D, Wet = col_W)
+etiquetas_tiempo_todas <- c("t0\n(0d)", "t1\n(14d)", "t2\n(30d)", "t3\n(60d)", "t4\n(120d)")
+
+# -----------------------------------------------------------------------------------------------------
+#  1. LEER LA PLANILLA
+# -----------------------------------------------------------------------------------------------------
+num <- function(x) suppressWarnings(as.numeric(gsub(",", ".", as.character(x))))
+F_desde_d <- function(d) { R <- R_VPDB * (1 + d / 1000); R / (1 + R) }
+
+lineas <- readLines(archivo, n = 20, warn = FALSE, encoding = codificacion)
+fila_header <- grep("sample_id", lineas)[1]
+if (is.na(fila_header)) stop("No se encontró 'sample_id' en las primeras 20 líneas del archivo.")
+linea_hdr <- lineas[fila_header]
+sep <- if (grepl(";", linea_hdr)) ";" else if (grepl("\t", linea_hdr)) "\t" else ","
+
+pl <- read_delim(archivo, delim = sep, skip = fila_header - 1,
+                 col_types = cols(.default = col_character()),
+                 locale = locale(encoding = codificacion), na = c("", "NA"), show_col_types = FALSE)
+pl <- pl[, !grepl("^\\.\\.\\.[0-9]+$", names(pl))]
+
+col_d_co2 <- intersect(c("13_CO2_δ", "13_CO2"), names(pl))[1]
+if (is.na(col_d_co2)) stop("No encuentro la columna del δ13C del CO2 (13_CO2_δ o 13_CO2).")
+faltan <- setdiff(c("sample_id", "extraction_time", "stage", "treatment", "site",
+                    "CO2_corrected_ppm", "Vol_headspace_mL"), names(pl))
+if (length(faltan) > 0) stop("Faltan columnas en la planilla: ", paste(faltan, collapse = ", "))
+
+co2 <- pl %>%
+  transmute(sample_id,
+            TIME  = as.integer(gsub("\\D", "", extraction_time)),
+            stage = factor(tolower(stage), levels = c("initial", "final")),
+            trt   = factor(treatment, levels = c("Dry", "Wet")),
+            site  = factor(site, levels = c("A", "B")),
+            CO2_ppm = num(CO2_corrected_ppm),
+            V_L     = num(Vol_headspace_mL) / 1000,
+            d_CO2   = num(.data[[col_d_co2]])) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(TIME), !is.na(stage))
+
+# -----------------------------------------------------------------------------------------------------
+#  2. POR FRASCO: µmol de C del CO2, µmol de 13C y reparto disolución / respiración
+# -----------------------------------------------------------------------------------------------------
+co2 <- co2 %>% mutate(
+  # µmol de C en el espacio de cabeza = ppm x 1e-6 x (P x V) / (R x T) x 1e6 = ppm x P x V / (R x T)
+  N_umol   = CO2_ppm * P_atm * V_L / (R_gas * T_kelvin),
+  F_CO2    = F_desde_d(d_CO2),
+  N13_umol = N_umol * F_CO2,
+  # reparto (solo se puede calcular si hay δ13C del CO2 en ese frasco)
+  F_calc   = unname(F_desde_d(d13C_calcita)[as.character(site)]),
+  F_resp   = F_desde_d(d13C_resp),
+  D_umol   = (N13_umol - N_umol * F_resp) / (F_calc - F_resp),     # disolución
+  Resp_umol = N_umol - D_umol                                      # respiración
+)
+
+cat("\nFrascos con ppm o volumen vacío:\n")
+co2 %>% filter(is.na(N_umol)) %>% select(sample_id, CO2_ppm, V_L) %>% print(n = 30)
+cat("\nFrascos con CO2 pero sin δ13C del CO2 (no entran en las figuras 2 y 3):\n")
+co2 %>% filter(!is.na(N_umol), is.na(d_CO2)) %>% count(trt, stage, TIME) %>% print(n = 40)
+
+# -----------------------------------------------------------------------------------------------------
+#  3. DELTA FINAL - INITIAL Y FLUJO
+# -----------------------------------------------------------------------------------------------------
+# delta = promedio_final - promedio_initial;  SD combinada = raíz(SD_final^2 + SD_initial^2)
+# flujo = delta / (24 h x área)   [µmol m-2 h-1]
+delta_flujo <- function(var, factor_unidad = 1) {
+  co2 %>% filter(!is.na(.data[[var]])) %>%
+    group_by(TIME, site, trt, stage) %>%
+    summarise(m = mean(.data[[var]]), sd = sd(.data[[var]]), n = n(), .groups = "drop") %>%
+    pivot_wider(names_from = stage, values_from = c(m, sd, n)) %>%
+    filter(!is.na(m_final), !is.na(m_initial)) %>%
+    mutate(d      = m_final - m_initial,
+           d_sd   = sqrt(sd_final^2 + sd_initial^2),
+           flux    = factor_unidad * d    / (incubation_time_h * A_sedimento_m2),
+           flux_sd = factor_unidad * d_sd / (incubation_time_h * A_sedimento_m2))
+}
+
+fl_C    <- delta_flujo("N_umol")                    # µmol C m-2 h-1
+fl_13C  <- delta_flujo("N13_umol", 1000)            # nmol 13C m-2 h-1
+fl_D    <- delta_flujo("D_umol")                    # µmol C m-2 h-1 (disolución)
+fl_Resp <- delta_flujo("Resp_umol")                 # µmol C m-2 h-1 (respiración)
+
+fl_rep <- bind_rows(fl_D %>% mutate(fuente = "Dissolution (calcite)"),
+                    fl_Resp %>% mutate(fuente = "Respiration"))
+
+cat("\nFLUJO de C total (µmol C m-2 h-1):\n")
+fl_C %>% select(TIME, site, trt, n_initial, n_final, flux, flux_sd) %>% arrange(trt, site, TIME) %>% print(n = Inf)
+cat("\nFLUJO repartido (µmol C m-2 h-1):\n")
+fl_rep %>% select(fuente, TIME, site, trt, n_initial, n_final, flux, flux_sd) %>%
+  arrange(fuente, trt, site, TIME) %>% print(n = Inf)
+
+# -----------------------------------------------------------------------------------------------------
+#  4. GRÁFICOS (mismo estilo que tu figura)
+# -----------------------------------------------------------------------------------------------------
+tema <- theme_bw(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30", margin = margin(b = 10)),
+        panel.background = element_rect(fill = "white", color = NA),
+        panel.grid.major = element_line(color = "gray90", linewidth = 0.5),
+        panel.grid.minor = element_line(color = "gray95", linewidth = 0.25),
+        panel.border = element_blank(), axis.line = element_line(color = "black", linewidth = 0.5),
+        strip.background = element_rect(fill = "gray92", color = NA),
+        strip.text = element_text(face = "bold", size = 12),
+        axis.title = element_text(face = "bold"), axis.text = element_text(color = "black"),
+        legend.position = "top")
+
+prepara <- function(df) {
+  df %>% mutate(site = factor(site, levels = c("A", "B"), labels = c("Site Low OM", "Site High OM")),
+                time_factor = factor(TIME, levels = 0:4, labels = etiquetas_tiempo_todas),
+                treatment = trt)
+}
+
+barras_flujo <- function(df, ylab, titulo, subtitulo, extra_facet = NULL) {
+  p <- ggplot(prepara(df), aes(x = time_factor, y = flux, fill = treatment, group = treatment)) +
+    geom_hline(yintercept = 0, color = "grey60", linewidth = 0.3) +
+    geom_col(position = position_dodge(width = 0.7), width = 0.45, alpha = 0.9) +
+    geom_errorbar(aes(ymin = flux - flux_sd, ymax = flux + flux_sd), position = position_dodge(width = 0.7),
+                  width = 0.15, linewidth = 0.5, color = "black", na.rm = TRUE) +
+    scale_x_discrete(limits = etiquetas_tiempo_todas, drop = FALSE) +
+    scale_fill_manual(values = col_trt, name = "Treatment", drop = FALSE) +
+    labs(title = titulo, subtitle = subtitulo, x = "Time", y = ylab) + tema
+  if (is.null(extra_facet)) p + facet_wrap(~ site) else p + facet_grid(fuente ~ site, scales = "free_y")
+}
+
+p_co2 <- barras_flujo(fl_C,
+  expression(bold("CO"[2]*" Flux ["*mu*"mol C m"^-2*" h"^-1*"]")),
+  expression(bold("CO"[2]*" Efflux Rate (Headspace)")),
+  "Bars: mean final - mean initial (24 h) ± combined SD")
+
+p_13 <- barras_flujo(fl_13C,
+  expression(bold(""^13*"C Flux [nmol "^13*"C m"^-2*" h"^-1*"]")),
+  expression(bold(""^13*"CO"[2]*" Efflux Rate (Headspace)")),
+  "Bars: mean final - mean initial (24 h) ± combined SD; only bottles with δ13C of the CO2")
+
+p_rep <- barras_flujo(fl_rep,
+  expression(bold("C Flux ["*mu*"mol C m"^-2*" h"^-1*"]")),
+  expression(bold("CO"[2]*" efflux: calcite dissolution vs respiration")),
+  paste0("Gas only (partial: dissolved DIC not included). δ13C calcite A=", d13C_calcita["A"], ", B=", d13C_calcita["B"],
+         " ‰ (provisional); respiration = ", d13C_resp, " ‰"),
+  extra_facet = TRUE)
+
+# -----------------------------------------------------------------------------------------------------
+#  5. MOSTRAR Y GUARDAR
+# -----------------------------------------------------------------------------------------------------
+print(p_co2); print(p_13); print(p_rep)
+
+dir.create(carpeta_out, showWarnings = FALSE, recursive = TRUE)
+ggsave(file.path(carpeta_out, "CO2flux_fig1_total.png"),         p_co2, width = 10, height = 5, dpi = 300)
+ggsave(file.path(carpeta_out, "CO2flux_fig2_13C.png"),           p_13,  width = 10, height = 5, dpi = 300)
+ggsave(file.path(carpeta_out, "CO2flux_fig3_disolucion_respiracion.png"), p_rep, width = 10, height = 7, dpi = 300)
+write_csv(co2,    file.path(carpeta_out, "CO2flux_1_por_frasco.csv"))
+write_csv(fl_C,   file.path(carpeta_out, "CO2flux_2_flujo_C_total.csv"))
+write_csv(fl_13C, file.path(carpeta_out, "CO2flux_3_flujo_13C.csv"))
+write_csv(fl_rep, file.path(carpeta_out, "CO2flux_4_flujo_disolucion_respiracion.csv"))
