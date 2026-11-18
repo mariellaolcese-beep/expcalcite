@@ -1,19 +1,14 @@
 # =====================================================================================================
-#  DIC y δ13C-DIC (13DIC): estadística y gráficos, y relación entre ambos
-#  Lee la planilla_total (los mismos nombres de columna que los otros scripts).
-#
+#  DIC y δ13C-DIC (13DIC): 
+#  Lee la planilla_total 
 #  Qué hace:
 #   1. Para DIC (mM) y δ13C-DIC (‰): líneas de promedio ± error estándar, OL y PW, por sitio.
-#      Etapa initial = largo plazo (antes de la incubación); final = después de 24 h (otro linetype).
+#      Etapa initial = Se usan para long ter  (antes de la incubación); final = después de 24 h (otro linetype).
 #   2. Estadística (Shapiro, Levene, ANOVA sitio x tiempo, Tukey entre tiempos) por capa y etapa.
-#   3. Dispersión DIC vs δ13C-DIC, frasco a frasco: ve de qué se mezcla el DIC.
+#   3. Dispersión DIC vs δ13C-DIC, x botella: ve de qué se mezcla el DIC.
 #   4. (Opcional) cambio respecto a t0.
 #
-#  Qué se corrigió respecto al script anterior:
-#   - Faltaba un "#" en la línea "4.3 Homocedasticidad" (daba error y paraba el script).
-#   - Usaba site_labels sin haberlo definido.
-#   - Estaba la carga de datos duplicada y el gráfico de delta no tenía código previo que funcionara.
-#   - Ahora lee la planilla_total (no DIC_R.csv) para tener DIC y δ13C en el mismo archivo.
+
 # =====================================================================================================
 library(tidyverse)
 library(car)        # leveneTest
@@ -25,9 +20,9 @@ library(emmeans)    # Tukey
 archivo      <- "C:/Experimentcalcite/data/planilla_total.csv"
 carpeta_out  <- "C:/Experimentcalcite/resultados"
 codificacion <- "UTF-8"
-trt_plot     <- "Wet"        # tratamiento que se dibuja y analiza (Wet o Dry; en Dry t1-t4 no hay agua medida)
+trt_plot     <- "Wet"        
 con_delta_t0 <- FALSE        # TRUE = añade las figuras de cambio respecto a t0
-col_capa     <- c(OL = "black", PW = "gray50")
+col_capa <- c(OL = "#1A1A1A", PW = "#D81B60")
 etiq_site    <- c(A = "A - Centre (MO baja)", B = "B - Cua (MO alta)")
 
 # -----------------------------------------------------------------------------------------------------
@@ -100,16 +95,16 @@ fig_lineas <- function(var_sel) {
     scale_shape_manual(values = c(OL = 16, PW = 17), name = "Capa") +
     scale_linetype_manual(values = c(initial = "solid", final = "dashed"), name = "Etapa") +
     labs(x = NULL, y = var_sel, title = paste0(var_sel, " (", trt_plot, ")"),
-         subtitle = "Línea continua = initial (largo plazo); discontinua = final (tras 24 h)",
+         subtitle = "Línea continua = initial ; discontinua = final (tras 24 h)",
          caption = "Promedio ± error estándar entre réplicas")  + tema
 }
 p_DIC <- fig_lineas(nombres_var["DIC"])
 p_d13 <- fig_lineas(nombres_var["d13"])
 
 # -----------------------------------------------------------------------------------------------------
-#  3. DISPERSIÓN DIC vs δ13C-DIC (frasco a frasco)
+#  3. DISPERSIÓN DIC vs δ13C-DIC (x botella)
 #     Es la figura que junta ambos: de qué fuentes se mezcla el DIC.
-#     Viladrau (δ ≈ -16 ‰), respiración (≈ -25 ‰) bajan el δ; la disolución de calcita (δ muy positivo) lo sube.
+#     Viladrau (δ ≈ -16 ‰), respiración (≈ -25 ‰) 
 # -----------------------------------------------------------------------------------------------------
 p_disp <- datos %>%
   filter(trt == trt_plot, !is.na(DIC), !is.na(d13)) %>%
@@ -119,8 +114,8 @@ p_disp <- datos %>%
   scale_color_manual(values = col_capa, name = "Capa") +
   scale_shape_manual(values = c(initial = 1, final = 16), name = "Etapa") +
   labs(x = "DIC (mM)", y = "δ13C-DIC (‰)",
-       title = paste0("DIC frente a δ13C-DIC (", trt_plot, ")"),
-       subtitle = "Cada punto es un frasco",
+       title = paste0("DIC y δ13C-DIC (", trt_plot, ")"),
+       subtitle = "por botella",
        caption = "Círculo vacío = initial, lleno = final") + tema
 
 # -----------------------------------------------------------------------------------------------------
