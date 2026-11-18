@@ -26,7 +26,7 @@ M_Ca         <- 40.078           # g/mol: ppm (mg/L) / M_Ca = mM
 dias_inc     <- 1                # incubación de 24 h
 stage_plot   <- "final"          # etapa para el gráfico de masas
 trt_plot     <- "Wet"            # tratamiento de las figuras (Wet o Dry)
-col_site     <- c(A = "#B4532A", B = "#2F6F73")
+col_capa <- c(OL = "#1A1A1A", PW = "#D81B60")
 
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 #                                                                                                            1. LEER Y LIMPIAR
@@ -89,25 +89,25 @@ ca <- ca %>%
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 #                                                                                             2. DEFINIR ENTRADAS DE CALCIO
 # -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#                                                                                                                                                                                                               
- ca <- ca %>%
+ca <- ca %>%
   mutate(
     # PASO 1. Pasamos las concentraciones a mM (ppm / M_Ca)
     p1_Ca_vd_mM    = Ca_vd_ppm    / M_Ca,
     p1_Ca_pwsed_mM = Ca_pwsed_ppm / M_Ca,
     p1_Ca_OL_mM    = Ca_OL_ppm    / M_Ca,
     p1_Ca_PW_mM    = Ca_PW_ppm    / M_Ca,
-
+    
     # PASO 2. Volúmenes iniciales y finales por compartimento (mL ≈ g)
     p2_V_OL_ini_mL = Vild_total_g,
     p2_V_PW_ini_mL = water_sed_init_mL,
     p2_V_OL_fin_mL = g_OL,
     p2_V_PW_fin_mL = sed_ST_g - g_OL - Sed_dry_g,   # agua de poro TOTAL = (sedimento + OL + agua de poro) - OL - sedimento seco
-
+    
     # PASO 3: ENTRADA de Ca por compartimento (mmol) = mM * mL / 1000
     p3_Ca_in_OL_mmol    = p1_Ca_vd_mM    * p2_V_OL_ini_mL / 1000,
     p3_Ca_in_PW_mmol    = p1_Ca_pwsed_mM * p2_V_PW_ini_mL / 1000,
     p3_Ca_in_total_mmol = p3_Ca_in_OL_mmol + p3_Ca_in_PW_mmol,
-
+    
     # PASO 4: CC FINAL de Ca por compartimento (mmol)
     p4_Ca_fin_OL_mmol        = p1_Ca_OL_mM * p2_V_OL_fin_mL / 1000,
     # CORREGIDA: concentración observada x volumen TEÓRICO (toda el agua de poro)
@@ -117,7 +117,7 @@ ca <- ca %>%
     p4_Ca_fin_PW_obs_mmol    = p1_Ca_PW_mM * g_PW / 1000,
     p4_Ca_fin_total_obs_mmol = p4_Ca_fin_OL_mmol + p4_Ca_fin_PW_obs_mmol,
     p4_factor_correccion_PW  = p2_V_PW_fin_mL / g_PW,     # volumen teórico / volumen extraído
-
+    
     # PASO 5: AHORA SACAMOS EL NETO = FINAL - ENTRADA, por compartimento y total
     p5_Ca_neto_OL_mmol        = p4_Ca_fin_OL_mmol - p3_Ca_in_OL_mmol,
     p5_Ca_neto_PW_mmol        = p4_Ca_fin_PW_mmol - p3_Ca_in_PW_mmol,
@@ -156,7 +156,7 @@ final <- ca %>% filter(stage == "final") %>%
     p8_dCa_OL_mmol    = p5_Ca_neto_OL_mmol    - p5_Ca_neto_OL_mmol_I,
     p8_dCa_PW_mmol    = p5_Ca_neto_PW_mmol    - p5_Ca_neto_PW_mmol_I,
     p8_dCa_total_mmol = p5_Ca_neto_total_mmol - p5_Ca_neto_total_mmol_I,
-
+    
     # Tasas (por día y por g de sedimento seco)
     p9_tasa_Ca_mmol_d   = p8_dCa_total_mmol / dias_inc,
     p9_tasa_Ca_umol_g_d = p9_tasa_Ca_mmol_d * 1000 / Sed_dry_g
