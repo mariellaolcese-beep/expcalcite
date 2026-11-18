@@ -1,15 +1,15 @@
 # =====================================================================================================
-#  DIC y δ13C-DIC (13DIC): 
-#  Lee la planilla_total 
+#  DIC y δ13C-DIC (13DIC): LARGO PLAZO Y DELTA 24 h (ROMBO DE PROMEDIO + PUNTOS INDIVIDUALES)
+#  Lee la planilla_total.csv
 #  Qué hace:
-#   1. Para DIC (mM) y δ13C-DIC (‰): líneas de promedio ± error estándar, OL y PW, por sitio.
-#      Etapa initial = Se usan para long ter  (antes de la incubación); final = después de 24 h (otro linetype).
+#   1. Genera 4 gráficos (facetados por capa OL y PW; Sitio A = negro, Sitio B = rosa):
+#      - Fig 1: DIC (mM) a largo plazo (frascos initial)
+#      - Fig 2: Efecto de 24 h en el DIC (delta = cada frasco final - promedio initial)
+#      - Fig 3: δ13C-DIC (‰) a largo plazo (frascos initial)
+#      - Fig 4: Efecto de 24 h en el δ13C-DIC (delta = cada frasco final - promedio initial)
 #   2. Estadística (Shapiro, Levene, ANOVA sitio x tiempo, Tukey entre tiempos) por capa y etapa.
-#   3. Dispersión DIC vs δ13C-DIC, x botella: ve de qué se mezcla el DIC.
-#   4. (Opcional) cambio respecto a t0.
-#
-
 # =====================================================================================================
+
 library(tidyverse)
 library(car)        # leveneTest
 library(emmeans)    # Tukey
@@ -20,10 +20,9 @@ library(emmeans)    # Tukey
 archivo      <- "C:/Experimentcalcite/data/planilla_total.csv"
 carpeta_out  <- "C:/Experimentcalcite/resultados"
 codificacion <- "UTF-8"
-trt_plot     <- "Wet"        
-con_delta_t0 <- FALSE        # TRUE = añade las figuras de cambio respecto a t0
-col_capa <- c(OL = "#1A1A1A", PW = "#D81B60")
-etiq_site    <- c(A = "A - Centre (MO baja)", B = "B - Cua (MO alta)")
+trt_plot     <- "Wet"                               # tratamiento a graficar ("Wet" o "Dry")
+col_site     <- c(A = "#1A1A1A", B = "#D81B60")     # Negro = Sitio A, Rosa = Sitio B
+etiq_site    <- c(A = "A (Low OM)", B = "B (High OM)")
 
 # -----------------------------------------------------------------------------------------------------
 #  1. LEER Y ORDENAR LOS DATOS
@@ -41,6 +40,7 @@ pl <- read_delim(archivo, delim = sep, skip = fila_header - 1,
                  locale = locale(encoding = codificacion),
                  na = c("", "NA"), show_col_types = FALSE)
 pl <- pl[, !grepl("^\\.\\.\\.[0-9]+$", names(pl))]
+names(pl) <- gsub("\\?", "δ", names(pl))   # por si Excel guardó δ como ?
 
 necesarias <- c("sample_id", "extraction_time", "stage", "treatment", "site",
                 "DIC_OL_mM", "DIC_PW_mM", "13DIC_OL_δ", "13DIC_PW_δ")
@@ -74,52 +74,93 @@ datos_l <- datos %>%
 cat("\nFrascos con dato por variable, capa y etapa (", trt_plot, "):\n")
 datos_l %>% filter(trt == trt_plot, !is.na(v)) %>% count(var, capa, stage) %>% print()
 
+# Cálculo de DELTA por botella: cada frasco final - promedio de los initial de su tiempo, sitio, trt y capa
+base_ini <- datos_l %>%
+  filter(stage == "initial") %>%
+  group_by(var, tiempo, site, trt, capa) %>%
+  summarise(m_ini = mean(v, na.rm = TRUE), .groups = "drop")
+
+datos_delta <- datos_l %>%
+  filter(stage == "final") %>%
+  left_join(base_ini, by = c("var", "tiempo", "site", "trt", "capa")) %>%
+  mutate(delta = v - m_ini)
+
 # -----------------------------------------------------------------------------------------------------
-#  2. GRÁFICOS DE LÍNEAS: DIC y δ13C-DIC
+#  2. LOS 4 GRÁFICOS (ROMBO = PROMEDIO + PUNTOS INDIVIDUALES)
 # -----------------------------------------------------------------------------------------------------
-tema <- theme_bw(base_size = 12) +
-  theme(plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
-        plot.subtitle = element_text(size = 10, hjust = 0.5),
-        axis.title = element_text(face = "bold"), legend.position = "bottom",
-        strip.background = element_rect(fill = "#f0f0f0"))
+tema <- theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text       = element_text(face = "bold", size = 12),
+    axis.title       = element_text(face = "bold"),
+    legend.position  = "bottom",
+    legend.title     = element_text(face = "bold"),
+    plot.title       = element_text(face = "bold", size = 13),
+    plot.subtitle    = element_text(size = 10),
+    plot.caption     = element_text(size = 9),
+    panel.spacing    = unit(1.2, "lines")
+  )
+
 eje_t <- scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4))
 
-fig_lineas <- function(var_sel) {
-  datos_l %>% filter(trt == trt_plot, var == var_sel, !is.na(v)) %>%
-    ggplot(aes(tiempo, v, color = capa, shape = capa, linetype = stage, group = interaction(capa, stage))) +
-    stat_summary(fun = mean, geom = "line", linewidth = 0.8) +
-    stat_summary(fun = mean, geom = "point", size = 2.5) +
-    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, linetype = "solid") +
-    facet_wrap(~ site, labeller = labeller(site = etiq_site)) + eje_t +
-    scale_color_manual(values = col_capa, name = "Capa") +
-    scale_shape_manual(values = c(OL = 16, PW = 17), name = "Capa") +
-    scale_linetype_manual(values = c(initial = "solid", final = "dashed"), name = "Etapa") +
-    labs(x = NULL, y = var_sel, title = paste0(var_sel, " (", trt_plot, ")"),
-         subtitle = "Línea continua = initial ; discontinua = final (tras 24 h)",
-         caption = "Promedio ± error estándar entre réplicas")  + tema
+# Función para gráficos de LARGO PLAZO (frascos initial)
+fig_largo <- function(var_sel, ylab, titulo) {
+  pts <- datos_l %>% filter(trt == trt_plot, stage == "initial", var == var_sel, !is.na(v))
+  prom <- pts %>% group_by(tiempo, site, capa) %>% summarise(m = mean(v), .groups = "drop")
+
+  ggplot() +
+    geom_hline(yintercept = 0, color = "grey60", linewidth = 0.35) +
+    geom_line(data = prom, aes(tiempo, m, color = site, group = site), linewidth = 0.65) +
+    geom_point(data = pts, aes(tiempo, v, color = site), size = 1.9, alpha = 0.55) +
+    geom_point(data = prom, aes(tiempo, m, color = site), shape = 18, size = 4.2) +
+    facet_wrap(~ capa, nrow = 1, scales = "free_y") +
+    eje_t +
+    scale_color_manual(values = col_site, labels = etiq_site, name = "Sitio") +
+    labs(
+      x        = NULL,
+      y        = ylab,
+      title    = paste0(titulo, " (", trt_plot, ")"),
+      subtitle = "Frascos initial. Puntos pequeños = cada frasco; rombo = promedio",
+      caption  = "Si los puntos de un tiempo se agrupan alrededor del rombo, el cambio es consistente entre réplicas"
+    ) +
+    tema
 }
-p_DIC <- fig_lineas(nombres_var["DIC"])
-p_d13 <- fig_lineas(nombres_var["d13"])
+
+# Función para gráficos de DELTA 24 h (final - promedio initial)
+fig_delta <- function(var_sel, ylab, titulo) {
+  pts <- datos_delta %>% filter(trt == trt_plot, var == var_sel, !is.na(delta))
+  prom <- pts %>% group_by(tiempo, site, capa) %>% summarise(m = mean(delta), .groups = "drop")
+
+  ggplot() +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey45", linewidth = 0.45) +
+    geom_line(data = prom, aes(tiempo, m, color = site, group = site), linewidth = 0.65) +
+    geom_point(data = pts, aes(tiempo, delta, color = site), size = 1.9, alpha = 0.55) +
+    geom_point(data = prom, aes(tiempo, m, color = site), shape = 18, size = 4.2) +
+    facet_wrap(~ capa, nrow = 1, scales = "free_y") +
+    eje_t +
+    scale_color_manual(values = col_site, labels = etiq_site, name = "Sitio") +
+    labs(
+      x        = NULL,
+      y        = ylab,
+      title    = paste0(titulo, " (", trt_plot, ")"),
+      subtitle = "Cada punto pequeño = un frasco final menos el promedio de los initial",
+      caption  = "Puntos a ambos lados de la línea de 0 = el signo no es consistente entre réplicas"
+    ) +
+    tema
+}
+
+p_DIC_largo <- fig_largo(nombres_var["DIC"], "DIC (mM)",
+                         "Evolución del DIC a largo plazo")
+p_DIC_delta <- fig_delta(nombres_var["DIC"], "Δ DIC final - initial (mM en 24 h)",
+                         "Efecto de la incubación de 24 h en el DIC")
+
+p_d13_largo <- fig_largo(nombres_var["d13"], "δ13C-DIC (‰)",
+                         "Evolución del δ13C-DIC a largo plazo")
+p_d13_delta <- fig_delta(nombres_var["d13"], "Δ δ13C-DIC final - initial (‰ en 24 h)",
+                         "Efecto de la incubación de 24 h en el δ13C-DIC")
 
 # -----------------------------------------------------------------------------------------------------
-#  3. DISPERSIÓN DIC vs δ13C-DIC (x botella)
-#     Es la figura que junta ambos: de qué fuentes se mezcla el DIC.
-#     Viladrau (δ ≈ -16 ‰), respiración (≈ -25 ‰) 
-# -----------------------------------------------------------------------------------------------------
-p_disp <- datos %>%
-  filter(trt == trt_plot, !is.na(DIC), !is.na(d13)) %>%
-  ggplot(aes(DIC, d13, color = capa, shape = stage)) +
-  geom_point(size = 2.6, alpha = 0.85) +
-  facet_wrap(~ site, labeller = labeller(site = etiq_site)) +
-  scale_color_manual(values = col_capa, name = "Capa") +
-  scale_shape_manual(values = c(initial = 1, final = 16), name = "Etapa") +
-  labs(x = "DIC (mM)", y = "δ13C-DIC (‰)",
-       title = paste0("DIC y δ13C-DIC (", trt_plot, ")"),
-       subtitle = "por botella",
-       caption = "Círculo vacío = initial, lleno = final") + tema
-
-# -----------------------------------------------------------------------------------------------------
-#  4. ESTADÍSTICA (por variable, etapa y capa; tratamiento = trt_plot)
+#  3. ESTADÍSTICA (por variable, etapa y capa; tratamiento = trt_plot)
 # -----------------------------------------------------------------------------------------------------
 cat("\n================ Shapiro-Wilk por grupo (n >= 3) ================\n")
 datos_l %>% filter(trt == trt_plot, !is.na(v)) %>%
@@ -145,36 +186,19 @@ stats_var <- function(var_sel) {
 for (v in nombres_var) stats_var(v)
 
 # -----------------------------------------------------------------------------------------------------
-#  5. (OPCIONAL) CAMBIO RESPECTO A t0
-#     Resta el promedio de t0 del mismo sitio, tratamiento, capa y etapa. Es "cambio desde el inicio",
-#     no el delta final-initial de 24 h.
+#  4. MOSTRAR EN PANTALLA Y GUARDAR
 # -----------------------------------------------------------------------------------------------------
-if (con_delta_t0) {
-  datos_t0 <- datos_l %>%
-    group_by(var, site, trt, capa, stage) %>%
-    mutate(cambio_t0 = v - mean(v[tiempo == 0], na.rm = TRUE)) %>% ungroup()
-  p_t0 <- datos_t0 %>% filter(trt == trt_plot, !is.na(cambio_t0)) %>%
-    ggplot(aes(tiempo, cambio_t0, color = capa, shape = capa, linetype = stage, group = interaction(capa, stage))) +
-    geom_hline(yintercept = 0, color = "grey60", linewidth = 0.3) +
-    stat_summary(fun = mean, geom = "line", linewidth = 0.8) +
-    stat_summary(fun = mean, geom = "point", size = 2.5) +
-    stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2, linetype = "solid") +
-    facet_grid(var ~ site, scales = "free_y", labeller = labeller(site = etiq_site)) + eje_t +
-    scale_color_manual(values = col_capa, name = "Capa") +
-    scale_shape_manual(values = c(OL = 16, PW = 17), name = "Capa") +
-    scale_linetype_manual(values = c(initial = "solid", final = "dashed"), name = "Etapa") +
-    labs(x = NULL, y = "Cambio respecto a t0", title = paste0("Cambio respecto a t0 (", trt_plot, ")")) + tema
+graphics.off()
+for (p in list(p_DIC_largo, p_DIC_delta, p_d13_largo, p_d13_delta)) {
+  print(p)
+  Sys.sleep(0.2)
 }
 
-# -----------------------------------------------------------------------------------------------------
-#  6. MOSTRAR Y GUARDAR
-# -----------------------------------------------------------------------------------------------------
-print(p_DIC); print(p_d13); print(p_disp)
-if (con_delta_t0) print(p_t0)
-
 dir.create(carpeta_out, showWarnings = FALSE, recursive = TRUE)
-ggsave(file.path(carpeta_out, paste0("DIC13_fig1_DIC_", trt_plot, ".png")),         p_DIC,  width = 9, height = 4.5, dpi = 300)
-ggsave(file.path(carpeta_out, paste0("DIC13_fig2_d13C_DIC_", trt_plot, ".png")),    p_d13,  width = 9, height = 4.5, dpi = 300)
-ggsave(file.path(carpeta_out, paste0("DIC13_fig3_dispersion_", trt_plot, ".png")),  p_disp, width = 9, height = 4.5, dpi = 300)
-if (con_delta_t0) ggsave(file.path(carpeta_out, paste0("DIC13_fig4_cambio_t0_", trt_plot, ".png")), p_t0, width = 9, height = 6, dpi = 300)
-write_csv(datos, file.path(carpeta_out, "DIC13_datos_por_frasco_y_capa.csv"))
+ggsave(file.path(carpeta_out, paste0("DIC13_fig1_DIC_largo_", trt_plot, ".png")),    p_DIC_largo, width = 8.5, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig2_DIC_delta_", trt_plot, ".png")),    p_DIC_delta, width = 8.5, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig3_d13C_largo_", trt_plot, ".png")),   p_d13_largo, width = 8.5, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig4_d13C_delta_", trt_plot, ".png")),   p_d13_delta, width = 8.5, height = 4.5, dpi = 300)
+
+write_csv(datos,       file.path(carpeta_out, "DIC13_datos_por_frasco_y_capa.csv"))
+write_csv(datos_delta, file.path(carpeta_out, "DIC13_delta_por_frasco_y_capa.csv"))
