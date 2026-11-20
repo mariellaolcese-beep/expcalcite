@@ -287,6 +287,7 @@ diccionario <- tribble(
 write_csv(diccionario, file.path(carpeta_out, "0_diccionario_de_columnas.csv"))
 
 ##########    PARA EL SOLIDO
+##########    PARA EL SOLIDO
 # Puntos de cada frasco para el delta: frasco FINAL - promedio de los initial (mismo tiempo, sitio y tratamiento)
 base_I_sol <- sol %>% filter(stage == "initial") %>%
   group_by(tiempo, site, trt) %>% summarise(neto_I = mean(Ca_neto_sed_mmol, na.rm = TRUE), .groups = "drop")
@@ -321,6 +322,7 @@ p_sol1
 p_sol2 <- ggplot() +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.4) +
   geom_point(data = pts_delta, aes(tiempo, d_frasco, color = site), position = dj, size = 1.6, alpha = 0.5) +
+  geom_line(data = delta_sol, aes(tiempo, d, color = site, group = site), position = dod, linewidth = 0.6) +
   geom_point(data = delta_sol, aes(tiempo, d, color = site), position = dod, shape = 18, size = 4.5) +
   facet_wrap(~ trt, nrow = 1) +
   scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
@@ -334,6 +336,32 @@ p_sol2 <- ggplot() +
   tema
 p_sol2
 
+# FIGURA S3. MASA de Ca del sedimento a largo plazo (mmol por frasco), no el cambio: puntos = cada frasco, rombo = promedio
+etapa_masa <- "initial"        # "initial" = frascos antes de la incubación de 24 h; cambia a "final" para ver los finales
+
+est_masa <- sol %>%
+  filter(stage == etapa_masa, !is.na(Ca_sed_mmol)) %>%
+  group_by(tiempo, site, trt) %>%
+  summarise(m = mean(Ca_sed_mmol), .groups = "drop")
+
+p_sol3 <- ggplot() +
+  geom_point(data = sol %>% filter(stage == etapa_masa, !is.na(Ca_sed_mmol)),
+             aes(tiempo, Ca_sed_mmol, color = site), position = dj, size = 1.6, alpha = 0.5) +
+  geom_line(data = est_masa, aes(tiempo, m, color = site, group = site), position = dod, linewidth = 0.6) +
+  geom_point(data = est_masa, aes(tiempo, m, color = site), position = dod, shape = 18, size = 4.5) +
+  facet_wrap(~ trt, nrow = 1) +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_y_continuous(labels = eje2) +
+  scale_color_manual(values = col_site, name = "Sitio") +
+  guides(color = guide_legend(override.aes = list(shape = 18, size = 4, alpha = 1))) +
+  labs(x = NULL, y = "Ca en el sedimento (mmol por frasco)",
+       title = "Masa de Ca del sedimento a largo plazo",
+       subtitle = paste0("Frascos ", etapa_masa, ". Puntos pequeños = cada frasco; rombo = promedio"),
+       caption = "A = MO baja, B = MO alta. Ca del sedimento = Ca_sed_ppm / 40,078 x masa de sedimento seco") +
+  tema
+p_sol3
+
+ggsave(file.path(carpeta_out, paste0("Ca_solido_fig3_masa_", etapa_masa, ".png")), p_sol3, width = 10, height = 4.5, dpi = 300)
 # ================================================================================================================================================================================================================================#
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 #                      .   *   .                                                  *   .     .      *.   * 
