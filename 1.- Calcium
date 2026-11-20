@@ -286,6 +286,54 @@ diccionario <- tribble(
 )
 write_csv(diccionario, file.path(carpeta_out, "0_diccionario_de_columnas.csv"))
 
+##########    PARA EL SOLIDO
+# Puntos de cada frasco para el delta: frasco FINAL - promedio de los initial (mismo tiempo, sitio y tratamiento)
+base_I_sol <- sol %>% filter(stage == "initial") %>%
+  group_by(tiempo, site, trt) %>% summarise(neto_I = mean(Ca_neto_sed_mmol, na.rm = TRUE), .groups = "drop")
+pts_delta <- sol %>% filter(stage == "final") %>%
+  left_join(base_I_sol, by = c("tiempo", "site", "trt")) %>%
+  mutate(d_frasco = Ca_neto_sed_mmol - neto_I) %>%
+  filter(!is.na(d_frasco))
+
+dj <- position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1)   # puntos sueltos, un poco separados
+
+# FIGURA S1. Solo los frascos INITIAL: puntos = cada frasco, rombo = promedio
+est_ini <- est_sol %>% filter(stage == "initial", !is.na(m), !is.nan(m))
+p_sol1 <- ggplot() +
+  geom_hline(yintercept = 0, color = "grey60", linewidth = 0.3) +
+  geom_point(data = sol %>% filter(stage == "initial", !is.na(Ca_neto_sed_mmol)),
+             aes(tiempo, Ca_neto_sed_mmol, color = site), position = dj, size = 1.6, alpha = 0.5) +
+  geom_line(data = est_ini, aes(tiempo, m, color = site, group = site), position = dod, linewidth = 0.6) +
+  geom_point(data = est_ini, aes(tiempo, m, color = site), position = dod, shape = 18, size = 4.5) +
+  facet_wrap(~ trt, nrow = 1) +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_y_continuous(labels = eje2) +
+  scale_color_manual(values = col_site, name = "Sitio") +
+  guides(color = guide_legend(override.aes = list(shape = 18, size = 4, alpha = 1))) +
+  labs(x = NULL, y = "Ca neto sólido = final - entrada (mmol por frasco)",
+       title = "Evolución del Ca del sedimento a largo plazo",
+       subtitle = "Frascos initial, antes de la incubación de 24 h. Puntos pequeños = cada frasco; rombo = promedio",
+       caption = "A = MO baja, B = MO alta. Si los puntos de un tiempo se agrupan alrededor del rombo, el cambio es consistente entre réplicas") +
+  tema
+p_sol1
+
+# FIGURA S2. Delta final - initial: puntos = cada frasco final menos el promedio de los initial, rombo = promedio
+p_sol2 <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40", linewidth = 0.4) +
+  geom_point(data = pts_delta, aes(tiempo, d_frasco, color = site), position = dj, size = 1.6, alpha = 0.5) +
+  geom_point(data = delta_sol, aes(tiempo, d, color = site), position = dod, shape = 18, size = 4.5) +
+  facet_wrap(~ trt, nrow = 1) +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_y_continuous(labels = eje2) +
+  scale_color_manual(values = col_site, name = "Sitio") +
+  guides(color = guide_legend(override.aes = list(shape = 18, size = 4, alpha = 1))) +
+  labs(x = NULL, y = "Δ Ca sólido final - initial (mmol en 24 h)",
+       title = "Efecto de la incubación de 24 h en el Ca del sedimento",
+       subtitle = "Puntos pequeños = un frasco final menos el promedio de los initial; rombo = promedio",
+       caption = "Puntos a ambos lados de la línea de 0 = el signo no es consistente entre réplicas") +
+  tema
+p_sol2
+
 # ================================================================================================================================================================================================================================#
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
 #                      .   *   .                                                  *   .     .      *.   * 
