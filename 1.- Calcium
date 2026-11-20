@@ -312,9 +312,9 @@ p_sol1 <- ggplot() +
   scale_color_manual(values = col_site, name = "Sitio") +
   guides(color = guide_legend(override.aes = list(shape = 18, size = 4, alpha = 1))) +
   labs(x = NULL, y = "Ca neto sólido = final - entrada (mmol por frasco)",
-       title = "Evolución del Ca del sedimento a largo plazo",
-       subtitle = "Frascos initial, antes de la incubación de 24 h. Puntos pequeños = cada frasco; rombo = promedio",
-       caption = "A = MO baja, B = MO alta. Si los puntos de un tiempo se agrupan alrededor del rombo, el cambio es consistente entre réplicas") +
+       title = "Evolución del Ca en el sedimento, 3 meses",
+       subtitle = "Botellas iniciales. Puntos pequeños = cada frasco; rombo = promedio",
+       caption = "A = MO baja, B = MO alta.") +
   tema
 p_sol1
 
@@ -331,8 +331,8 @@ p_sol2 <- ggplot() +
   guides(color = guide_legend(override.aes = list(shape = 18, size = 4, alpha = 1))) +
   labs(x = NULL, y = "Δ Ca sólido final - initial (mmol en 24 h)",
        title = "Efecto de la incubación de 24 h en el Ca del sedimento",
-       subtitle = "Puntos pequeños = un frasco final menos el promedio de los initial; rombo = promedio",
-       caption = "Puntos a ambos lados de la línea de 0 = el signo no es consistente entre réplicas") +
+       subtitle = "Final-Inicial",
+       caption = "hay un punto raro en t2BW") +
   tema
 p_sol2
 
@@ -356,7 +356,7 @@ p_sol3 <- ggplot() +
   guides(color = guide_legend(override.aes = list(shape = 18, size = 4, alpha = 1))) +
   labs(x = NULL, y = "Ca en el sedimento (mmol por frasco)",
        title = "Masa de Ca del sedimento a largo plazo",
-       subtitle = paste0("Frascos ", etapa_masa, ". Puntos pequeños = cada frasco; rombo = promedio"),
+       subtitle = paste0("Frascos ", etapa_masa, ". "),
        caption = "A = MO baja, B = MO alta. Ca del sedimento = Ca_sed_ppm / 40,078 x masa de sedimento seco") +
   tema
 p_sol3
