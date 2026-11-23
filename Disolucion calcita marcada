@@ -1,0 +1,70 @@
+# Disolucion de calcita marcada (D) 
+# D [umol de calcita] = exceso de 13C / (F_marcaje - F_fondo)
+# exceso de 13C = 13C_OL - C_OL * F_fondo      (F_fondo = F de Viladrau, -16.3 permil)
+library(dplyr); library(ggplot2); library(stringr)
+
+F_marcaje <- 0.99      # enriquecimiento de la calcita marcada 
+dias_inc  <- 1
+
+d <- pl %>%
+  transmute(
+    sample_id,
+    tiempo = as.integer(str_extract(extraction_time, "\\d+")),
+    stage  = factor(tolower(stage), levels = c("initial", "final")),
+    trt    = factor(treatment, levels = c("Dry", "Wet")),
+    site   = factor(site, levels = c("A", "B")),
+    Sed_dry_g = num(Sed_init_dry_g),
+    C_OL_umol = num(DIC_OL_bottle_mmol) * 1000,          # C del OL (umol)
+    C13_OL    = num(`13DIC_OL_bottle_umol`),             # 13C del OL (umol)
+    F_fondo   = num(F_viladrau)                          # fondo = Viladrau
+  ) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage)) %>%
+  mutate(
+    xs13C = C13_OL - C_OL_umol * F_fondo,                # exceso de 13C (umol)
+    D     = xs13C / (F_marcaje - F_fondo)                # calcita marcada disuelta (umol)
+  )
+
+# 0) comprobacion de datos por grupo (que no falte nada en t1-t4)
+d %>% group_by(trt, tiempo, stage) %>%
+  summarise(n = n(), con_D = sum(!is.na(D)), .groups = "drop") %>% print(n = Inf)
+
+# 1) Delta final - media de los initial (mismo tiempo, sitio, tratamiento)
+base_I <- d %>% filter(stage == "initial") %>%
+  group_by(tiempo, site, trt) %>% summarise(D_I = mean(D, na.rm = TRUE), .groups = "drop")
+
+fin <- d %>% filter(stage == "final") %>%
+  left_join(base_I, by = c("tiempo", "site", "trt")) %>%
+  mutate(dD = D - D_I,                                   # umol en 24 h
+         tasa_umol_g_d = dD / dias_inc / Sed_dry_g)
+
+# 2) Resumen con SD combinada
+est <- d %>% group_by(tiempo, site, trt, stage) %>%
+  summarise(n = sum(!is.na(D)), m = mean(D, na.rm = TRUE), sd = sd(D, na.rm = TRUE), .groups = "drop")
+delta <- est %>% tidyr::pivot_wider(names_from = stage, values_from = c(n, m, sd)) %>%
+  mutate(dD = m_final - m_initial, dD_sd = sqrt(sd_final^2 + sd_initial^2),
+         distinguible = abs(dD) > 2 * dD_sd) %>%
+  filter(!is.na(dD)) %>% arrange(trt, site, tiempo)
+print(delta %>% select(trt, site, tiempo, dD, dD_sd, distinguible), n = Inf)
+
+# 3) Figura: cada botella final - media initial, rombo = promedio (solo Wet)
+col_site <- c(A = "#1A1A1A", B = "#D81B60")
+dod <- position_dodge(width = 0.25)
+p <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+  geom_point(data = fin %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
+             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1),
+             size = 1.6, alpha = 0.5) +
+  geom_point(data = delta %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
+             position = dod, shape = 18, size = 4.5) +
+  geom_errorbar(data = delta %>% filter(trt == "Wet"),
+                aes(tiempo, ymin = dD - dD_sd, ymax = dD + dD_sd, colour = site),
+                position = dod, width = 0.2, linewidth = 0.4) +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_y_continuous(labels = function(x) sprintf("%.3f", x)) +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = "ΔD calcita marcada disuelta en 24 h (µmol)",
+       title = "Wet: disolución de 24 h (método F = 0,99)",
+       caption = "Puntos = cada botella final − media initial; rombo = promedio; barras = SD combinada.") +
+  theme_minimal(base_size = 12) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+ggsave("Wet_dD_F099.png", p, width = 7, height = 5, dpi = 300)
+p
