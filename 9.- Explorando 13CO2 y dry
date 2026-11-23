@@ -1,0 +1,305 @@
+# CO2 derivado de la calcita marcada (headspace) por botella, y su relacion con la humedad
+# D_CO2 [umol de calcita marcada] = (13CO2 - CO2 * F_fondo_CO2) / (F_marcaje - F_fondo_CO2)
+# ΔD_CO2 de 24 h = botella final - media de las initial (mismo sitio, tiempo y tratamiento)
+# Humedad = gramos de agua por g de sedimento seco, de tus pesos al sacrificar
+library(dplyr); library(tidyr); library(ggplot2); library(stringr); library(readr)
+
+F_marcaje <- 0.9999
+# FONDO de 13C del CO2 (respiracion + aire): PROVISIONAL, -25 permil. Se prueban tambien -20 y -30 (sensibilidad)
+fondo_de_delta <- function(d) { R <- 0.0111802 * (1 + d/1000); R / (1 + R) }
+F_fondo_CO2 <- fondo_de_delta(-25)
+
+carpeta_data <- "C:/Experimentcalcite/data"
+# Busca el CSV de pesos en la carpeta data por su nombre (WEIGTH ... WATERADDITION), sin importar comas o espacios
+cand <- list.files(carpeta_data, pattern = "WEIGTH.*WATER.*ADD.*\\.csv$", ignore.case = TRUE, full.names = TRUE)
+if (length(cand) == 0) stop("No encuentro el CSV de pesos en ", carpeta_data, ". Pon su nombre completo en archivo_pesos.")
+if (length(cand) > 1) { message("Varios archivos coinciden, uso el primero:\n", paste(cand, collapse = "\n")) }
+archivo_pesos <- cand[1]
+message("Pesos: ", archivo_pesos)
+
+# ---- 1) humedad por botella al sacrificar -----------------------------------------------------------------
+w <- read_delim(archivo_pesos, delim = ";", col_names = FALSE, skip = 1,
+                col_types = cols(.default = "c"), show_col_types = FALSE) %>%
+  transmute(sample_id = X2, pyrex_g = num(X8), peso_sacrificio = num(X11))
+
+hum <- pl %>%
+  transmute(sample_id, Sed_dry_g = num(Sed_init_dry_g)) %>%
+  inner_join(w, by = "sample_id") %>%
+  mutate(agua_g = peso_sacrificio - pyrex_g - Sed_dry_g,        # agua total (sedimento + OL restante)
+         w_g_g  = agua_g / Sed_dry_g)                            # g de agua por g de sedimento seco
+
+# ---- 2) D_CO2 por botella y delta de 24 h ------------------------------------------------------------------
+calc_dco2 <- function(Ffondo) {
+  dd <- pl %>%
+    transmute(sample_id,
+              tiempo = as.integer(str_extract(extraction_time, "\\d+")),
+              stage  = factor(tolower(stage), levels = c("initial", "final")),
+              trt    = factor(treatment, levels = c("Dry", "Wet")),
+              site   = factor(site, levels = c("A", "B")),
+              CO2_umol = num(`mmol de CO2`) * 1000, C13_CO2 = num(`13CO2_umol`)) %>%
+    filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage)) %>%
+    mutate(D = (C13_CO2 - CO2_umol * Ffondo) / (F_marcaje - Ffondo))
+  base_I <- dd %>% filter(stage == "initial") %>%
+    group_by(tiempo, site, trt) %>% summarise(D_I = mean(D, na.rm = TRUE), .groups = "drop")
+  dd %>% filter(stage == "final") %>% left_join(base_I, by = c("tiempo", "site", "trt")) %>%
+    mutate(dD = D - D_I) %>% filter(!is.na(dD)) %>% left_join(hum, by = "sample_id")
+}
+fin <- calc_dco2(F_fondo_CO2)
+
+# ---- 3) sensibilidad al fondo (-20, -25, -30 permil): mediana de ΔD por tratamiento y tiempo ---------------
+sens <- bind_rows(lapply(c(-20, -25, -30), function(dl) calc_dco2(fondo_de_delta(dl)) %>% mutate(fondo_d13C = dl))) %>%
+  group_by(fondo_d13C, trt, tiempo) %>% summarise(mediana = median(dD), media = mean(dD), sd = sd(dD), .groups = "drop")
+print(sens %>% arrange(trt, tiempo, fondo_d13C), n = Inf)
+
+# ---- 4) Figura A: ΔD_CO2 en el tiempo, Dry y Wet -----------------------------------------------------------
+res <- fin %>% group_by(tiempo, site, trt) %>% summarise(m = mean(dD), sd = sd(dD), .groups = "drop")
+col_site <- c(A = "#1A1A1A", B = "#D81B60"); dod <- position_dodge(width = 0.25)
+pA <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+  geom_point(data = fin, aes(tiempo, dD, colour = site),
+             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1), size = 1.3, alpha = 0.5) +
+  geom_line(data = res, aes(tiempo, m, colour = site, group = site), position = dod, linewidth = 0.6) +
+  geom_errorbar(data = res, aes(tiempo, ymin = m - sd, ymax = m + sd, colour = site), position = dod, width = 0.2, linewidth = 0.4) +
+  geom_point(data = res, aes(tiempo, m, colour = site), position = dod, shape = 18, size = 4) +
+  facet_wrap(~ trt, nrow = 1) +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_y_continuous(labels = function(x) sprintf("%.4f", x)) +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = "ΔD calcita marcada en el CO2\n(µmol en 24 h)",
+       title = "CO2 derivado de la calcita marcada, Dry y Wet",
+       caption = "Compartimento: headspace. Puntos = botellas finales − media initial; rombo = promedio; barras = SD.\nFondo de 13C del CO2 provisional (−25 ‰).") +
+  theme_minimal(base_size = 12) + theme(legend.position = "bottom", panel.grid.minor = element_blank(),
+                                        strip.text = element_text(face = "bold"))
+ggsave("CO2_calcita_tiempo.png", pA, width = 8, height = 4.8, dpi = 300); print(pA)
+
+# ---- 5) Figura B: ΔD_CO2 frente a la humedad (cada punto = una botella final) --------------------------------
+fh <- fin %>% filter(!is.na(w_g_g))
+pB <- ggplot(fh, aes(w_g_g, dD)) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+  geom_point(aes(colour = site, shape = trt), size = 2, alpha = 0.7) +
+  geom_smooth(aes(group = 1), method = "lm", se = TRUE, colour = "grey30", linewidth = 0.5, fill = "grey85") +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  scale_shape_manual(values = c(Dry = 17, Wet = 16), name = "Tratamiento") +
+  scale_y_continuous(labels = function(x) sprintf("%.4f", x)) +
+  labs(x = "Agua al sacrificar (g de agua por g de sedimento seco)",
+       y = "ΔD calcita marcada en el CO2\n(µmol en 24 h)",
+       title = "CO2 derivado de la calcita frente a la humedad",
+       caption = "Compartimento: headspace. Humedad estimada de los pesos al sacrificar.") +
+  theme_minimal(base_size = 12) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
+ggsave("CO2_calcita_vs_humedad.png", pB, width = 7, height = 5, dpi = 300); print(pB)
+
+# ---- 6) regresiones sencillas ---------------------------------------------------------------------------
+cat("\n--- ΔD ~ humedad (todas las botellas) ---\n");            print(summary(lm(dD ~ w_g_g, data = fh))$coefficients)
+cat("\n--- ΔD ~ humedad + sitio + tiempo (factor) ---\n");       print(summary(lm(dD ~ w_g_g + site + factor(tiempo), data = fh))$coefficients)
+
+
+
+# CO2 total (respiracion + calcita) y CO2 derivado de la calcita, juntos, para Dry y Wet
+# Fila de arriba: CO2 total del headspace de las botellas finales (µmol)  -> escala de la respiracion
+# Fila de abajo : ΔD calcita marcada en el CO2 (µmol en 24 h)             -> parte que viene de la calcita
+# Necesita en memoria lo mismo que CO2_calcita_vs_humedad.R: `pl` y la funcion `num`
+library(dplyr); library(tidyr); library(ggplot2); library(stringr)
+
+F_marcaje <- 0.9999
+fondo_de_delta <- function(d) { R <- 0.0111802 * (1 + d/1000); R / (1 + R) }
+F_fondo_CO2 <- fondo_de_delta(-25)          # provisional, -25 permil
+
+dd <- pl %>%
+  transmute(sample_id,
+            tiempo = as.integer(str_extract(extraction_time, "\\d+")),
+            stage  = factor(tolower(stage), levels = c("initial", "final")),
+            trt    = factor(treatment, levels = c("Dry", "Wet")),
+            site   = factor(site, levels = c("A", "B")),
+            CO2_umol = num(`mmol de CO2`) * 1000, C13_CO2 = num(`13CO2_umol`)) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage)) %>%
+  mutate(D = (C13_CO2 - CO2_umol * F_fondo_CO2) / (F_marcaje - F_fondo_CO2))
+
+base_I <- dd %>% filter(stage == "initial") %>%
+  group_by(tiempo, site, trt) %>% summarise(D_I = mean(D, na.rm = TRUE), .groups = "drop")
+
+fin <- dd %>% filter(stage == "final") %>%
+  left_join(base_I, by = c("tiempo", "site", "trt")) %>%
+  mutate(dD = D - D_I)
+
+# tabla larga: una fila por botella y variable
+largo <- fin %>%
+  select(tiempo, site, trt, `CO2 total (µmol)` = CO2_umol, `ΔD calcita en el CO2 (µmol/24 h)` = dD) %>%
+  pivot_longer(c(`CO2 total (µmol)`, `ΔD calcita en el CO2 (µmol/24 h)`), names_to = "variable", values_to = "valor") %>%
+  filter(!is.na(valor)) %>%
+  mutate(variable = factor(variable, levels = c("CO2 total (µmol)", "ΔD calcita en el CO2 (µmol/24 h)")))
+
+res <- largo %>% group_by(variable, tiempo, site, trt) %>%
+  summarise(m = mean(valor), sd = sd(valor), .groups = "drop")
+
+# resumen en consola
+cat("\n--- CO2 total y ΔD por grupo (media ± SD) ---\n")
+print(res %>% mutate(across(c(m, sd), ~ round(.x, 4))) %>% arrange(variable, trt, site, tiempo), n = Inf)
+
+col_site <- c(A = "#1A1A1A", B = "#D81B60"); dod <- position_dodge(width = 0.25)
+p <- ggplot() +
+  geom_hline(data = data.frame(variable = factor("ΔD calcita en el CO2 (µmol/24 h)", levels = levels(largo$variable))),
+             aes(yintercept = 0), linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+  geom_point(data = largo, aes(tiempo, valor, colour = site),
+             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1), size = 1.3, alpha = 0.5) +
+  geom_line(data = res, aes(tiempo, m, colour = site, group = site), position = dod, linewidth = 0.6) +
+  geom_errorbar(data = res, aes(tiempo, ymin = m - sd, ymax = m + sd, colour = site), position = dod, width = 0.2, linewidth = 0.4) +
+  geom_point(data = res, aes(tiempo, m, colour = site), position = dod, shape = 18, size = 4) +
+  facet_grid(variable ~ trt, scales = "free_y", switch = "y") +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = NULL,
+       title = "CO2 total y CO2 derivado de la calcita, Dry y Wet",
+       caption = "Headspace de botellas finales. Puntos = botellas; rombo = promedio; barras = SD.\nΔD = final − media initial; fondo de 13C del CO2 provisional (−25 ‰). Ojo: los ejes y son distintos en cada fila.") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank(),
+        strip.text = element_text(face = "bold"), strip.placement = "outside")
+
+ggsave("CO2_total_y_calcita.png", p, width = 8, height = 7, dpi = 300); print(p)
+
+
+# Analisis de disolucion y sequia (Dry vs Wet), tres partes en un solo script
+#   Parte 1: test formal Dry vs Wet sobre el ΔD del CO2 (modelo por botella + t de Welch por grupo)
+#   Parte 2: fraccion del CO2 que viene de la calcita (ΔD / CO2 total), que no depende de cuanta respiracion haya
+#   Parte 3: Dry vs Wet en t0 y t1 en los compartimentos con agua (OL, PW, Total), metodo del tutor
+# Necesita en memoria lo mismo que los otros scripts: `pl` y la funcion `num`
+library(dplyr); library(tidyr); library(ggplot2); library(stringr)
+
+F_marcaje <- 0.9999
+fondo_de_delta <- function(d) { R <- 0.0111802 * (1 + d/1000); R / (1 + R) }
+F_fondo_CO2   <- fondo_de_delta(-25)                       # CO2: respiracion + aire, PROVISIONAL (-25 permil)
+F_fondo_agua  <- 0.010878323                               # OL y PW: Viladrau (-16,3 permil)
+escala_total  <- 1     # 1 = solo calcita marcada. Para estimar calcita total, pon ~200 (A) y mira la nota de la Parte 2
+
+col_site <- c(A = "#1A1A1A", B = "#D81B60"); dod <- position_dodge(width = 0.25)
+tema <- theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank(), strip.text = element_text(face = "bold"))
+
+# ---- datos por botella (los tres compartimentos) ----------------------------------------------------------
+d <- pl %>%
+  transmute(
+    sample_id,
+    tiempo = as.integer(str_extract(extraction_time, "\\d+")),
+    stage  = factor(tolower(stage), levels = c("initial", "final")),
+    trt    = factor(treatment, levels = c("Dry", "Wet")),
+    site   = factor(site, levels = c("A", "B")),
+    C_OL  = num(DIC_OL_bottle_mmol) * 1000, C13_OL  = num(`13DIC_OL_bottle_umol`),
+    C_PW  = num(DIC_PW_bottle_mmol) * 1000, C13_PW  = num(`13DIC_PW_bottle_umol`),
+    CO2_umol = num(`mmol de CO2`) * 1000,   C13_CO2 = num(`13CO2_umol`)
+  ) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage)) %>%
+  mutate(
+    D_OL  = (C13_OL  - C_OL  * F_fondo_agua) / (F_marcaje - F_fondo_agua),
+    D_PW  = (C13_PW  - C_PW  * F_fondo_agua) / (F_marcaje - F_fondo_agua),
+    D_CO2 = (C13_CO2 - CO2_umol * F_fondo_CO2) / (F_marcaje - F_fondo_CO2),
+    D_Total = D_OL + D_PW + D_CO2                           # NA si falta algun compartimento
+  )
+
+# ΔD de cada botella final = D - media de las initial (mismo sitio, tiempo, tratamiento)
+delta <- function(dat, col) {
+  dat <- dat %>% mutate(D = .data[[col]]) %>% filter(!is.na(D))
+  base_I <- dat %>% filter(stage == "initial") %>% group_by(tiempo, site, trt) %>%
+    summarise(D_I = mean(D), .groups = "drop")
+  dat %>% filter(stage == "final") %>% left_join(base_I, by = c("tiempo", "site", "trt")) %>%
+    mutate(dD = D - D_I) %>% filter(!is.na(dD))
+}
+
+# t de Welch Dry vs Wet para un data.frame con columnas trt y y (devuelve NA si no hay n>=2 en los dos)
+welch <- function(df) {
+  a <- df$y[df$trt == "Dry"]; b <- df$y[df$trt == "Wet"]
+  if (sum(!is.na(a)) < 2 || sum(!is.na(b)) < 2) return(tibble(n_Dry = sum(!is.na(a)), n_Wet = sum(!is.na(b)),
+                                                             media_Dry = NA_real_, media_Wet = NA_real_, p = NA_real_))
+  tibble(n_Dry = sum(!is.na(a)), n_Wet = sum(!is.na(b)), media_Dry = mean(a, na.rm = TRUE),
+         media_Wet = mean(b, na.rm = TRUE), p = t.test(a, b)$p.value)
+}
+
+# =====================================================================================================
+# PARTE 1: ΔD del CO2, Dry vs Wet
+# =====================================================================================================
+co2 <- delta(d, "D_CO2") %>% filter(tiempo >= 1)
+cat("\n=== PARTE 1: ΔD del CO2 (µmol en 24 h), t1-t4 ===\n")
+m1 <- lm(dD ~ trt * site + factor(tiempo), data = co2)
+cat("\n--- ANOVA (efecto del tratamiento ya descontando sitio y tiempo) ---\n"); print(anova(m1))
+cat("\n--- Coeficientes ---\n"); print(round(summary(m1)$coefficients, 5))
+
+p1_tab <- co2 %>% mutate(y = dD) %>% group_by(site, tiempo) %>% group_modify(~ welch(.x)) %>% ungroup() %>%
+  mutate(p_ajustada = p.adjust(p, "holm"))
+cat("\n--- Dry vs Wet por sitio y tiempo (t de Welch; p_ajustada = Holm sobre todos) ---\n")
+print(p1_tab %>% mutate(across(c(media_Dry, media_Wet), ~ round(.x, 5)), p = round(p, 4), p_ajustada = round(p_ajustada, 4)), n = Inf)
+
+res1 <- co2 %>% group_by(tiempo, site, trt) %>% summarise(m = mean(dD), sd = sd(dD), .groups = "drop")
+pA <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+  geom_point(data = co2, aes(tiempo, dD, colour = site),
+             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1), size = 1.3, alpha = 0.5) +
+  geom_line(data = res1, aes(tiempo, m, colour = site, group = site), position = dod, linewidth = 0.6) +
+  geom_errorbar(data = res1, aes(tiempo, ymin = m - sd, ymax = m + sd, colour = site), position = dod, width = 0.2, linewidth = 0.4) +
+  geom_point(data = res1, aes(tiempo, m, colour = site), position = dod, shape = 18, size = 4) +
+  facet_wrap(~ trt, nrow = 1) +
+  scale_x_continuous(breaks = 1:4, labels = paste0("t", 1:4)) +
+  scale_y_continuous(labels = function(x) sprintf("%.4f", x)) +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = "ΔD calcita marcada en el CO2\n(µmol en 24 h)", title = "Parte 1: ΔD del CO2, Dry vs Wet",
+       caption = "Headspace. Puntos = botellas finales − media initial; rombo = promedio; barras = SD. Fondo de 13C del CO2 provisional (−25 ‰).") + tema
+ggsave("P1_dD_CO2_Dry_vs_Wet.png", pA, width = 8, height = 4.8, dpi = 300); print(pA)
+
+# =====================================================================================================
+# PARTE 2: fraccion del CO2 que viene de la calcita
+# =====================================================================================================
+fr <- co2 %>% mutate(frac_pct = 100 * dD * escala_total / CO2_umol)
+cat("\n=== PARTE 2: % del CO2 del headspace que viene de la calcita (escala_total =", escala_total, ") ===\n")
+cat("OJO: con mucho CO2 total, un error pequeno del fondo de 13C se amplifica; leelo como orden de magnitud.\n")
+m2 <- lm(frac_pct ~ trt * site + factor(tiempo), data = fr)
+cat("\n--- ANOVA de la fraccion ---\n"); print(anova(m2))
+p2_tab <- fr %>% mutate(y = frac_pct) %>% group_by(site, tiempo) %>% group_modify(~ welch(.x)) %>% ungroup() %>%
+  mutate(p_ajustada = p.adjust(p, "holm"))
+print(p2_tab %>% mutate(across(c(media_Dry, media_Wet), ~ round(.x, 4)), p = round(p, 4), p_ajustada = round(p_ajustada, 4)), n = Inf)
+
+res2 <- fr %>% group_by(tiempo, site, trt) %>% summarise(m = mean(frac_pct), sd = sd(frac_pct), .groups = "drop")
+pB <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+  geom_point(data = fr, aes(tiempo, frac_pct, colour = site),
+             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1), size = 1.3, alpha = 0.5) +
+  geom_line(data = res2, aes(tiempo, m, colour = site, group = site), position = dod, linewidth = 0.6) +
+  geom_errorbar(data = res2, aes(tiempo, ymin = m - sd, ymax = m + sd, colour = site), position = dod, width = 0.2, linewidth = 0.4) +
+  geom_point(data = res2, aes(tiempo, m, colour = site), position = dod, shape = 18, size = 4) +
+  facet_wrap(~ trt, nrow = 1) +
+  scale_x_continuous(breaks = 1:4, labels = paste0("t", 1:4)) +
+  scale_y_continuous(labels = function(x) sprintf("%.3f", x)) +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = "% del CO2 que viene de la calcita",
+       title = "Parte 2: fracción de calcita en el CO2 del headspace",
+       caption = paste0("100 × ΔD / CO2 total de la botella final. escala_total = ", escala_total,
+                        " (1 = solo calcita marcada). Fondo de 13C del CO2 provisional (−25 ‰).")) + tema
+ggsave("P2_fraccion_calcita_en_CO2.png", pB, width = 8, height = 4.8, dpi = 300); print(pB)
+
+# =====================================================================================================
+# PARTE 3: Dry vs Wet en t0 y t1 en agua (OL, PW, Total), metodo del tutor
+# =====================================================================================================
+cat("\n=== PARTE 3: compartimentos con agua, Dry vs Wet, t0 y t1 ===\n")
+cat("\n--- cuantas botellas tienen dato (por compartimento) ---\n")
+d %>% filter(tiempo <= 1) %>% group_by(trt, tiempo, stage) %>%
+  summarise(n = n(), OL = sum(!is.na(D_OL)), PW = sum(!is.na(D_PW)), Total = sum(!is.na(D_Total)), .groups = "drop") %>% print(n = Inf)
+
+comps <- c(D_OL = "OL (agua suprayacente)", D_PW = "PW (agua de poro)", D_Total = "Total (OL+PW+CO2)")
+f3 <- bind_rows(lapply(names(comps), function(cl) delta(d, cl) %>% mutate(comp = comps[[cl]]))) %>%
+  filter(tiempo <= 1) %>% mutate(comp = factor(comp, levels = comps))
+
+p3_tab <- f3 %>% mutate(y = dD) %>% group_by(comp, site, tiempo) %>% group_modify(~ welch(.x)) %>% ungroup()
+cat("\n--- ΔD Dry vs Wet (t de Welch; sin ajustar, son pocas comparaciones y pocas botellas) ---\n")
+print(p3_tab %>% mutate(across(c(media_Dry, media_Wet), ~ round(.x, 4)), p = round(p, 4)), n = Inf)
+
+res3 <- f3 %>% group_by(comp, tiempo, site, trt) %>% summarise(m = mean(dD), sd = sd(dD), n = n(), .groups = "drop")
+pC <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+  geom_point(data = f3, aes(trt, dD, colour = site),
+             position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.5, seed = 1), size = 1.5, alpha = 0.55) +
+  geom_point(data = res3, aes(trt, m, colour = site), position = position_dodge(width = 0.5), shape = 18, size = 4.5) +
+  geom_errorbar(data = res3 %>% filter(!is.na(sd)), aes(trt, ymin = m - sd, ymax = m + sd, colour = site),
+                position = position_dodge(width = 0.5), width = 0.2, linewidth = 0.4) +
+  facet_grid(comp ~ tiempo, scales = "free_y", labeller = labeller(tiempo = function(x) paste0("t", x))) +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  scale_y_continuous(labels = function(x) sprintf("%.3f", x)) +
+  labs(x = NULL, y = "ΔD calcita marcada disuelta en 24 h (µmol)",
+       title = "Parte 3: Dry vs Wet en t0 y t1, compartimentos con agua",
+       caption = "Metodo del tutor (F = 0,9999). Puntos = botellas finales − media initial; rombo = promedio; barras = SD. Si falta el grupo Dry no hay punto.") + tema
+ggsave("P3_Dry_vs_Wet_agua_t0_t1.png", pC, width = 8, height = 8, dpi = 300); print(pC)
