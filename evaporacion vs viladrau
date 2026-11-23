@@ -1,0 +1,59 @@
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+
+num <- function(x) suppressWarnings(as.numeric(gsub(",", ".", as.character(x))))
+
+# Ruta completa de tu archivo CSV
+ruta_archivo <- "C:/Experimentcalcite/data/WEIGTH,PIC,WATERADDITION(Weigth+wateraddition (2)).csv"
+
+# Lectura del archivo
+w <- read_delim(ruta_archivo, delim = ";",
+                col_names = FALSE, skip = 1, col_types = cols(.default = "c"),
+                show_col_types = FALSE)
+
+# Columnas por posición (el archivo repite nombres): 
+# 2 LAB_Code (codigo), 3 site, 4 trat, 5 tiempo, 6 I/F, 10 pyrex+sed+agua, 11 peso final, 13 mL_OL
+idx_add <- seq(21, 50, by = 3)
+
+ev <- w %>%
+  mutate(across(everything(), ~ .x)) %>%
+  transmute(
+    codigo = X2, sitio = X3, trat = X4,
+    tiempo = suppressWarnings(as.integer(str_extract(X5, "\\d+"))),
+    etapa  = X6,
+    peso_ini = num(X10), peso_fin = num(X11), OL_mL = num(X13),
+    anadido = rowSums(sapply(idx_add, function(i) num(w[[i]])), na.rm = TRUE)
+  ) %>%
+  filter(trat == "W", !is.na(tiempo), tiempo >= 1, !is.na(peso_ini), !is.na(peso_fin)) %>%
+  mutate(
+    evap      = peso_ini + anadido - peso_fin,   # g ~ mL evaporados
+    neto      = peso_ini - peso_fin,             # agua perdida en neto
+    renov     = anadido / OL_mL                  # veces que "se cambió" el agua
+  ) %>%
+  select(codigo, sitio, trat, tiempo, etapa, peso_ini, peso_fin, OL_mL, anadido, evap, neto, renov)
+
+# 1) Resumen general por sitio y tiempo
+resumen <- ev %>% group_by(sitio, tiempo) %>%
+  summarise(n = n(), anadido = mean(anadido), evap = mean(evap),
+            neto = mean(neto), renov = mean(renov), .groups = "drop")
+print(resumen, n = Inf)
+
+# 2) Tabla detallada por botella (incluye 'codigo' para fusionar con otras tablas)
+print(head(ev))
+
+# Guardar en CSV para llegar y pegar / unir con tus otras tablas
+write_csv(ev, "C:/Experimentcalcite/data/Wet_evaporacion_detallado_por_codigo.csv")
+
+# 3) Figura: relleno vs evaporacion (cada punto = una botella)
+p <- ggplot(ev, aes(anadido, evap, colour = sitio)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey55") +
+  geom_point(size = 2) +
+  scale_colour_manual(values = c(A = "#1A1A1A", B = "#D81B60")) +
+  labs(x = "Agua añadida con Viladrau (mL)", y = "Agua evaporada (mL)",
+       colour = "Sitio", caption = "Wet, t1–t4. Línea 1:1 = el relleno repone justo lo evaporado.") +
+  theme_classic(base_size = 11)
+
+ggsave("C:/Experimentcalcite/data/Wet_evaporacion_vs_relleno.png", p, width = 6, height = 5, dpi = 300)
+p
