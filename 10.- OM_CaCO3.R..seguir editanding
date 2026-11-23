@@ -220,6 +220,78 @@ p_om_site <- ggplot(sed_plot, aes(x = site_labeled, y = pct_OM, fill = site_labe
     plot.title = element_text(face = "bold", size = 12, hjust = 0.5),    # Centra el título
     plot.subtitle = element_text(size = 10, color = "gray30", hjust = 0.5), # Centra el subtítulo
     panel.grid.minor = element_blank()
+
+
+
+
+    # Calcimetria del solido (%CaCO3) a largo plazo: Dry vs Wet, por sitio
+# %CaCO3 = porcentaje de calcita del sedimento (columna "%CaCO3_calcimetry"). Tambien se pasa a mmol de CaCO3 por frasco.
+# Necesita en memoria: `pl` y la funcion `num`
+library(dplyr); library(tidyr); library(ggplot2); library(stringr)
+
+M_CaCO3 <- 100.0869          # g/mol
+etapas  <- c("initial", "final")      # c("initial") para solo las botellas initial
+
+cal <- pl %>%
+  transmute(
+    tiempo = as.integer(gsub("\\D", "", extraction_time)),
+    stage  = factor(tolower(stage), levels = c("initial", "final")),
+    trt    = factor(treatment, levels = c("Dry", "Wet")),
+    site   = factor(site, levels = c("A", "B")),
+    Sed_dry_g = num(Sed_init_dry_g),
+    pct = num(`%CaCO3_calcimetry`)
+  ) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage), !is.na(pct), stage %in% etapas) %>%
+  mutate(mmol_CaCO3 = pct / 100 * Sed_dry_g / M_CaCO3 * 1000)     # mmol de CaCO3 por frasco (aprox., con la masa seca inicial)
+
+cat("\n--- botellas con calcimetria, por grupo ---\n")
+print(cal %>% count(trt, site, tiempo) %>% pivot_wider(names_from = tiempo, values_from = n, names_prefix = "t"), n = Inf)
+cat("\n--- rango de los datos (revisa que sean % y no fracciones) ---\n"); print(summary(cal$pct))
+
+cat("\n--- media ± SD de %CaCO3 por grupo ---\n")
+res <- cal %>% group_by(tiempo, site, trt) %>% summarise(m = mean(pct), sd = sd(pct), n = n(), .groups = "drop")
+print(res %>% mutate(across(c(m, sd), ~ round(.x, 3))) %>% arrange(site, trt, tiempo), n = Inf)
+
+# pendiente con el tiempo por grupo
+cat("\n--- pendiente de %CaCO3 con el tiempo, por grupo (puntos porcentuales por paso de tiempo) ---\n")
+pend <- cal %>% group_by(trt, site) %>% group_modify(~ {
+  m <- lm(pct ~ tiempo, data = .x); s <- summary(m)$coefficients
+  tibble(pendiente = s["tiempo", 1], ee = s["tiempo", 2], p = s["tiempo", 4], n = nrow(.x))
+}) %>% ungroup()
+print(pend %>% mutate(across(c(pendiente, ee), ~ round(.x, 4)), p = round(p, 3)))
+
+# Dry vs Wet: modelo por sitio (la fila tiempo:trt dice si evolucionan distinto)
+cat("\n--- Modelo por sitio: %CaCO3 ~ tiempo * tratamiento ---\n")
+for (s in c("A", "B")) { cat("\nSitio", s, "\n"); print(anova(lm(pct ~ tiempo * trt, data = cal %>% filter(site == s)))) }
+
+# Dry vs Wet en cada tiempo (t de Welch, sin ajustar)
+cat("\n--- Dry vs Wet por sitio y tiempo (t de Welch) ---\n")
+tw <- cal %>% group_by(site, tiempo) %>% group_modify(~ {
+  a <- .x$pct[.x$trt == "Dry"]; b <- .x$pct[.x$trt == "Wet"]
+  if (length(a) < 2 || length(b) < 2) return(tibble(media_Dry = NA_real_, media_Wet = NA_real_, p = NA_real_))
+  tibble(media_Dry = mean(a), media_Wet = mean(b), p = t.test(a, b)$p.value)
+}) %>% ungroup()
+print(tw %>% mutate(across(c(media_Dry, media_Wet), ~ round(.x, 3)), p = round(p, 3)), n = Inf)
+
+# figura
+col_site <- c(A = "#1A1A1A", B = "#D81B60"); dod <- position_dodge(width = 0.25)
+p <- ggplot() +
+  geom_point(data = cal, aes(tiempo, pct, colour = site),
+             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1), size = 1.4, alpha = 0.5) +
+  geom_smooth(data = cal, aes(tiempo, pct, colour = site, group = site), method = "lm", se = FALSE, linewidth = 0.5, linetype = "dotted") +
+  geom_line(data = res, aes(tiempo, m, colour = site, group = site), position = dod, linewidth = 0.6) +
+  geom_point(data = res, aes(tiempo, m, colour = site), position = dod, shape = 18, size = 4) +
+  facet_wrap(~ trt, nrow = 1) +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_y_continuous(labels = function(x) sprintf("%.2f", x)) +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = "% CaCO3 del sedimento",
+       title = "Calcimetría del sólido, Dry vs Wet",
+       caption = paste0("Compartimento: sedimento. Botellas ", paste(etapas, collapse = " + "),
+                        ". Puntos = botellas; rombo = promedio; línea de puntos = regresión lineal por sitio.")) +
+  theme_minimal(base_size = 12) + theme(legend.position = "bottom", panel.grid.minor = element_blank(),
+                                        strip.text = element_text(face = "bold"))
+ggsave("Calcimetria_Dry_vs_Wet.png", p, width = 8, height = 4.8, dpi = 300); print(p)
   )
 
 # 4. Guardar gráfico
