@@ -1,5 +1,5 @@
 # ================================================================================================================================================================================================================================#
-#                                                                                CALCIUM, HAY QUE ARREGLAR LOS GRAFICOS PORQUE ESTAN HORRIBLES!!!!!!!!!
+#                                                                                CALCIUM, Y otros elementos!!!!!!!!!
 # ================================================================================================================================================================================================================================#
 #
 # Archivo: C:/Experimentcalcite/data/planilla_total.csv
@@ -24,6 +24,8 @@ carpeta_out  <- "C:/Experimentcalcite/resultados"
 codificacion <- "UTF-8"
 M_Ca         <- 40.078           # g/mol: ppm (mg/L) / M_Ca = mM
 dias_inc     <- 1                # incubación de 24 h
+F_marcaje    <- 0.9999           # enriquecimiento del reactivo marcado (99,99 %)
+F_fondo      <- 0.010878323      # fondo de 13C = Viladrau (-16,3 permil); mismo para OL y PW (provisional)
 stage_plot   <- "final"          # etapa para el gráfico de masas
 trt_plot     <- "Wet"            # tratamiento de las figuras (Wet o Dry)
 col_capa     <- c(OL = "#1A1A1A", PW = "#D81B60")
@@ -423,9 +425,11 @@ base <- pl %>%
     site    = factor(site, levels = c("A", "B")),
     OL_pH   = ph_ok(pH_OL),   OL_DIC = num(DIC_OL_mM), OL_Ca = num(Ca_OL_mM),
     OL_Mg   = num(Mg_OL_ppm), OL_Na = num(Na_OL_ppm), OL_d13 = num(.data[[col_d13_OL]]),
+    OL_C    = num(DIC_OL_bottle_mmol) * 1000, OL_C13 = num(`13DIC_OL_bottle_umol`),   # umol de C y de 13C en el OL
     CO2_ppm = num(CO2_corrected_ppm), d13CO2 = num(.data[[col_d13_CO2]]),
     PW_pH   = ph_ok(pH_PW),   PW_DIC = num(DIC_PW_mM), PW_Ca = num(Ca_PW_mM),
-    PW_Mg   = num(Mg_PW_ppm), PW_Na = num(Na_PW_ppm), PW_d13 = num(.data[[col_d13_PW]])
+    PW_Mg   = num(Mg_PW_ppm), PW_Na = num(Na_PW_ppm), PW_d13 = num(.data[[col_d13_PW]]),
+    PW_C    = num(DIC_PW_bottle_mmol) * 1000, PW_C13 = num(`13DIC_PW_bottle_umol`)
   ) %>%
   filter(trt == "Wet", !is.na(site), !is.na(tiempo), !is.na(stage))
 
@@ -439,6 +443,8 @@ mk <- function(d, pre, nombre) {
          Na_ppm = d[[paste0(pre, "_Na")]],
          Mg_ppm = d[[paste0(pre, "_Mg")]],
          CaNa = d[[paste0(pre, "_Ca")]] / (d[[paste0(pre, "_Na")]] / 22.99),
+         # calcita marcada disuelta (metodo del tutor): exceso de 13C / (F_marcaje - F_fondo), en umol por botella
+         D = (d[[paste0(pre, "_C13")]] - d[[paste0(pre, "_C")]] * F_fondo) / (F_marcaje - F_fondo),
          Omega = if_else(!is.na(d[[paste0(pre, "_DIC")]]) & d[[paste0(pre, "_DIC")]] > 0.5,
                          omega_calcita(d[[paste0(pre, "_pH")]], d[[paste0(pre, "_DIC")]],
                                        d[[paste0(pre, "_Ca")]], d[[paste0(pre, "_Mg")]],
@@ -458,16 +464,19 @@ f2 <- function(x) sprintf("%.2f", x)
 # Decimales según la magnitud de cada panel: >=100 sin decimales (µM, ppm), >=10 un decimal, menor 2 decimales
 eje_auto <- function(x) {
   r <- max(abs(x), na.rm = TRUE)
-  d <- if (r >= 100) 0 else if (r >= 10) 1 else 2
+  d <- if (r >= 100) 0 else if (r >= 10) 1 else if (r >= 0.1) 2 else 3
   sprintf(paste0("%.", d, "f"), x)
 }
 
-fig_multi <- function(d, vars, etiquetas, titulo, columnas = "comp", caption = NULL, escalas = "free_y") {
+# media geometrica: log10(media geometrica de Omega) = media de SI -> Omega y SI coherentes
+media_geo <- function(x) exp(mean(log(x)))
+fig_multi <- function(d, vars, etiquetas, titulo, columnas = "comp", caption = NULL, escalas = "free_y",
+                      fun_media = mean) {
   largo <- d %>% pivot_longer(all_of(vars), names_to = "variable", values_to = "valor") %>%
     filter(!is.na(valor)) %>%
     mutate(variable = factor(variable, levels = vars, labels = etiquetas))
   m <- largo %>% group_by(across(all_of(c(columnas, "variable", "site", "tiempo")))) %>%
-    summarise(v = mean(valor), .groups = "drop")
+    summarise(v = fun_media(valor), .groups = "drop")
   ggplot(largo, aes(tiempo, valor, color = site)) +
     geom_point(position = dj, size = 1.2, alpha = 0.6) +
     geom_line(data = m, aes(y = v, group = site), position = dd, linewidth = 0.6) +
@@ -484,14 +493,16 @@ fig_multi <- function(d, vars, etiquetas, titulo, columnas = "comp", caption = N
 cap_aguas <- "Compartimentos: OL = overlying water (agua suprayacente); PW = porewater (agua de poro). Cada panel es un compartimento, no una suma."
 
 # Figura 1: Ω del OL y del PW (una fila)
-p_omega <- fig_multi(agua, "Omega", "Ω calcita", "Wet: Ω de calcita (OL y PW)", caption = cap_aguas) +
+p_omega <- fig_multi(agua, "Omega", "Ω calcita", "Wet: Ω de calcita (OL y PW)", fun_media = media_geo,
+                     caption = paste0(cap_aguas, " Línea y rombo = media geométrica (su log10 es el SI medio).")) +
   theme(strip.text.y.left = element_text(size = 9))
 
 # Figura 2: carbonato (SI, Ca, DIC, δ13C-DIC, pH)
 # δ13C-DIC = razón isotópica respecto al estándar VPDB (‰), no una concentración
-p_SI_Ca <- fig_multi(agua, c("SI", "Ca_mM", "DIC_mM", "d13DIC", "pH"),
-                     c("SI\n(log10 Ω)", "Ca\n(mM)", "DIC\n(mM)", "δ13C-DIC\n(‰ VPDB)", "pH"),
-                     "Wet: SI, Ca, DIC, δ13C-DIC y pH del agua (OL y PW)", caption = cap_aguas) +
+p_SI_Ca <- fig_multi(agua, c("SI", "Ca_mM", "DIC_mM", "d13DIC", "pH", "D"),
+                     c("SI\n(log10 Ω)", "Ca\n(mM)", "DIC\n(mM)", "δ13C-DIC\n(‰ VPDB)", "pH", "D calcita marcada\n(µmol)"),
+                     "Wet: SI, Ca, DIC, δ13C-DIC, pH y calcita marcada disuelta del agua (OL y PW)",
+                     caption = paste0(cap_aguas, " D = calcita marcada disuelta acumulada por botella (método del tutor, F = 0,9999).")) +
   theme(strip.text.y.left = element_text(size = 9))
 
 # Figura 3: elementos del agua, TODOS en µM, y Ca/Mg molar
@@ -535,6 +546,6 @@ print(p_iones)
 print(p_CO2)
 
 ggsave(file.path(carpeta_out, "Wet_fig1_Omega.png"),  p_omega, width = 8, height = 4.5, dpi = 300)
-ggsave(file.path(carpeta_out, "Wet_fig2_SI_Ca.png"),  p_SI_Ca, width = 8, height = 9,   dpi = 300)
+ggsave(file.path(carpeta_out, "Wet_fig2_SI_Ca.png"),  p_SI_Ca, width = 8, height = 11,  dpi = 300)
 ggsave(file.path(carpeta_out, "Wet_fig3_iones.png"),  p_iones, width = 8, height = 10, dpi = 300)
 ggsave(file.path(carpeta_out, "Wet_fig4_CO2.png"),    p_CO2,   width = 6, height = 5,   dpi = 300)
