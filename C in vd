@@ -1,0 +1,43 @@
+# Carbono que entra con el Viladrau vs carbono que hay en el agua al medir (Wet, t1-t4)
+# Usa el objeto `pl` de tu script (columnas en texto con coma decimal -> num()).
+library(dplyr); library(ggplot2); library(stringr)
+
+d <- pl %>%
+  transmute(
+    sitio  = site,
+    etapa  = tolower(stage),
+    trat   = treatment,
+    tiempo = as.integer(str_extract(extraction_time, "\\d+")),   # "t3" -> 3
+    C_add  = num(DIC_add_vild_total_mmol) * 1000,                 # umol que entraron con Viladrau
+    C_ol   = num(DIC_OL_bottle_mmol) * 1000                       # umol de C en el agua al medir
+  ) %>%
+  filter(trat == "Wet", tiempo >= 1, !is.na(C_add), !is.na(C_ol))
+
+print(count(d, sitio, tiempo, etapa))   # debe dar 4 botellas por grupo
+
+# Pendiente dentro de cada grupo (resta la media del grupo): fraccion que se queda
+dc <- d %>% group_by(sitio, tiempo) %>%
+  mutate(x = C_add - mean(C_add), y = C_ol - mean(C_ol)) %>% ungroup()
+m  <- lm(y ~ 0 + x, data = dc)
+cat("Fraccion del C del Viladrau que se queda: ",
+    round(coef(m), 2), " +/- ", round(summary(m)$coefficients[1, 2], 2), "\n")
+
+p <- ggplot(d, aes(C_add, C_ol, colour = sitio, shape = etapa)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey55") +
+  geom_point(size = 2) +
+  annotate("text", x = max(d$C_add) * 0.6, y = max(d$C_add) * 0.68,
+           label = "1:1 (todo el carbono se quedaria)", colour = "grey35", size = 3) +
+  scale_colour_manual(values = c(A = "#1A1A1A", B = "#D81B60")) +
+  coord_cartesian(xlim = c(0, NA), ylim = c(0, NA)) +
+  labs(x = "Carbono que entró con el Viladrau (µmol)",
+       y = "Carbono en el agua al medir (µmol)",
+       colour = "Sitio", shape = "Botella",
+       caption = "Wet, t1–t4. Cada punto es una botella.") +
+  theme_classic(base_size = 11)
+ggsave("Wet_C_vs_Viladrau.png", p, width = 6.5, height = 5, dpi = 300)
+p
+
+# Comprobacion de equivalencia inicial vs final (C en el agua y Viladrau recibido)
+d %>% group_by(sitio, tiempo, etapa) %>%
+  summarise(n = n(), C_ol = round(mean(C_ol)), C_add = round(mean(C_add)), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = etapa, values_from = c(n, C_ol, C_add)) %>% print(n = Inf)
