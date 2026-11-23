@@ -68,3 +68,86 @@ p <- ggplot() +
   theme_minimal(base_size = 12) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
 ggsave("Wet_dD_F099.png", p, width = 7, height = 5, dpi = 300)
 p
+
+
+# Calcita MARCADA disuelta (metodo F=0,99 solo calcita marcada) por compartimento: OL, PW, CO2 del headspace y total
+# D [umol] = exceso de 13C / (F_marcaje - F_fondo);  exceso = 13C - C * F_fondo
+library(dplyr); library(tidyr); library(ggplot2); library(stringr)
+
+F_marcaje <- 0.9999            # enriquecimiento del reactivo (99,99 %)
+# Fondo por compartimento. Por ahora el mismo (Viladrau, -16,3 permil); cambialo si decides otro
+F_fondo <- c(OL = 0.010878323, PW = 0.010878323, CO2 = 0.010878323)
+dias_inc <- 1
+
+d <- pl %>%
+  transmute(
+    sample_id,
+    tiempo = as.integer(str_extract(extraction_time, "\\d+")),
+    stage  = factor(tolower(stage), levels = c("initial", "final")),
+    trt    = factor(treatment, levels = c("Dry", "Wet")),
+    site   = factor(site, levels = c("A", "B")),
+    Sed_dry_g = num(Sed_init_dry_g),
+    C_OL  = num(DIC_OL_bottle_mmol) * 1000,   C13_OL  = num(`13DIC_OL_bottle_umol`),
+    C_PW  = num(DIC_PW_bottle_mmol) * 1000,   C13_PW  = num(`13DIC_PW_bottle_umol`),
+    C_CO2 = num(`mmol de CO2`) * 1000,        C13_CO2 = num(`13CO2_umol`)
+  ) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage)) %>%
+  mutate(
+    D_OL  = (C13_OL  - C_OL  * F_fondo["OL"])  / (F_marcaje - F_fondo["OL"]),
+    D_PW  = (C13_PW  - C_PW  * F_fondo["PW"])  / (F_marcaje - F_fondo["PW"]),
+    D_CO2 = (C13_CO2 - C_CO2 * F_fondo["CO2"]) / (F_marcaje - F_fondo["CO2"]),
+    D_Total = D_OL + D_PW + D_CO2        # NA si falta algun compartimento
+  )
+
+# 0) cuantas botellas tienen dato por compartimento
+d %>% group_by(trt, tiempo, stage) %>%
+  summarise(n = n(), OL = sum(!is.na(D_OL)), PW = sum(!is.na(D_PW)),
+            CO2 = sum(!is.na(D_CO2)), Total = sum(!is.na(D_Total)), .groups = "drop") %>% print(n = Inf)
+
+# 1) Delta final - media initial, por compartimento
+largo <- d %>% pivot_longer(c(D_OL, D_PW, D_CO2, D_Total), names_to = "comp", values_to = "D") %>%
+  mutate(comp = factor(comp, levels = c("D_OL", "D_PW", "D_CO2", "D_Total"),
+                       labels = c("OL (overlying water)", "PW (porewater)", "CO2 (headspace)", "Total"))) %>%
+  filter(!is.na(D))
+
+base_I <- largo %>% filter(stage == "initial") %>%
+  group_by(tiempo, site, trt, comp) %>% summarise(D_I = mean(D), .groups = "drop")
+fin <- largo %>% filter(stage == "final") %>%
+  left_join(base_I, by = c("tiempo", "site", "trt", "comp")) %>%
+  mutate(dD = D - D_I) %>% filter(!is.na(dD))
+
+est <- largo %>% group_by(tiempo, site, trt, comp, stage) %>%
+  summarise(m = mean(D), sd = sd(D), .groups = "drop") %>%
+  pivot_wider(names_from = stage, values_from = c(m, sd)) %>%
+  mutate(dD = m_final - m_initial, dD_sd = sqrt(sd_final^2 + sd_initial^2),
+         distinguible = abs(dD) > 2 * dD_sd) %>% filter(!is.na(dD))
+print(est %>% filter(trt == "Wet") %>% select(site, tiempo, comp, dD, dD_sd, distinguible) %>%
+        arrange(comp, site, tiempo), n = Inf)
+
+# 2) Figura: Wet, un panel por compartimento
+col_site <- c(A = "#1A1A1A", B = "#D81B60")
+dod <- position_dodge(width = 0.25)
+p <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+  geom_point(data = fin %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
+             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1),
+             size = 1.4, alpha = 0.5) +
+  geom_line(data = est %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site, group = site),
+            position = dod, linewidth = 0.6) +
+  geom_errorbar(data = est %>% filter(trt == "Wet"),
+                aes(tiempo, ymin = dD - dD_sd, ymax = dD + dD_sd, colour = site),
+                position = dod, width = 0.2, linewidth = 0.4) +
+  geom_point(data = est %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
+             position = dod, shape = 18, size = 4) +
+  facet_wrap(~ comp, nrow = 1, scales = "free_y") +
+  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
+  scale_y_continuous(labels = function(x) sprintf("%.3f", x)) +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = "ΔD calcita marcada disuelta en 24 h (µmol)",
+       title = "Wet: disolución de calcita marcada por compartimento (F = 0,9999)",
+       caption = "Compartimentos: OL = agua suprayacente; PW = agua de poro; CO2 = gas del headspace; Total = suma (solo botellas con los tres).\nPuntos = cada botella final − media initial; rombo = promedio; barras = SD combinada.") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank(),
+        strip.text = element_text(face = "bold"))
+ggsave("Wet_dD_F=0,99_compartimentos.png", p, width = 11, height = 4.8, dpi = 300)
+p
