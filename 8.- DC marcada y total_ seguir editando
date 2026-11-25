@@ -1,83 +1,16 @@
 # Disolucion de calcita marcada (D) 
-# D [umol de calcita] = exceso de 13C / (F_marcaje - F_fondo)
-# exceso de 13C = 13C_OL - C_OL * F_fondo      (F_fondo = F de Viladrau, -16.3 permil)
-library(dplyr); library(ggplot2); library(stringr)
-
-F_marcaje <- 0.99      # enriquecimiento de la calcita marcada 
-dias_inc  <- 1
-
-d <- pl %>%
-  transmute(
-    sample_id,
-    tiempo = as.integer(str_extract(extraction_time, "\\d+")),
-    stage  = factor(tolower(stage), levels = c("initial", "final")),
-    trt    = factor(treatment, levels = c("Dry", "Wet")),
-    site   = factor(site, levels = c("A", "B")),
-    Sed_dry_g = num(Sed_init_dry_g),
-    C_OL_umol = num(DIC_OL_bottle_mmol) * 1000,          # C del OL (umol)
-    C13_OL    = num(`13DIC_OL_bottle_umol`),             # 13C del OL (umol)
-    F_fondo   = num(F_viladrau)                          # fondo = Viladrau
-  ) %>%
-  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage)) %>%
-  mutate(
-    xs13C = C13_OL - C_OL_umol * F_fondo,                # exceso de 13C (umol)
-    D     = xs13C / (F_marcaje - F_fondo)                # calcita marcada disuelta (umol)
-  )
-
-# 0) comprobacion de datos por grupo (que no falte nada en t1-t4)
-d %>% group_by(trt, tiempo, stage) %>%
-  summarise(n = n(), con_D = sum(!is.na(D)), .groups = "drop") %>% print(n = Inf)
-
-# 1) Delta final - media de los initial (mismo tiempo, sitio, tratamiento)
-base_I <- d %>% filter(stage == "initial") %>%
-  group_by(tiempo, site, trt) %>% summarise(D_I = mean(D, na.rm = TRUE), .groups = "drop")
-
-fin <- d %>% filter(stage == "final") %>%
-  left_join(base_I, by = c("tiempo", "site", "trt")) %>%
-  mutate(dD = D - D_I,                                   # umol en 24 h
-         tasa_umol_g_d = dD / dias_inc / Sed_dry_g)
-
-# 2) Resumen con SD combinada
-est <- d %>% group_by(tiempo, site, trt, stage) %>%
-  summarise(n = sum(!is.na(D)), m = mean(D, na.rm = TRUE), sd = sd(D, na.rm = TRUE), .groups = "drop")
-delta <- est %>% tidyr::pivot_wider(names_from = stage, values_from = c(n, m, sd)) %>%
-  mutate(dD = m_final - m_initial, dD_sd = sqrt(sd_final^2 + sd_initial^2),
-         distinguible = abs(dD) > 2 * dD_sd) %>%
-  filter(!is.na(dD)) %>% arrange(trt, site, tiempo)
-print(delta %>% select(trt, site, tiempo, dD, dD_sd, distinguible), n = Inf)
-
-# 3) Figura: cada botella final - media initial, rombo = promedio (solo Wet)
-col_site <- c(A = "#1A1A1A", B = "#D81B60")
-dod <- position_dodge(width = 0.25)
-p <- ggplot() +
-  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
-  geom_point(data = fin %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
-             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1),
-             size = 1.6, alpha = 0.5) +
-  geom_point(data = delta %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
-             position = dod, shape = 18, size = 4.5) +
-  geom_errorbar(data = delta %>% filter(trt == "Wet"),
-                aes(tiempo, ymin = dD - dD_sd, ymax = dD + dD_sd, colour = site),
-                position = dod, width = 0.2, linewidth = 0.4) +
-  scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
-  scale_y_continuous(labels = function(x) sprintf("%.3f", x)) +
-  scale_colour_manual(values = col_site, name = "Sitio") +
-  labs(x = NULL, y = "ΔD calcita marcada disuelta en 24 h (µmol)",
-       title = "Wet: disolución de 24 h (método F = 0,99)",
-       caption = "Puntos = cada botella final − media initial; rombo = promedio; barras = SD combinada.") +
-  theme_minimal(base_size = 12) + theme(legend.position = "bottom", panel.grid.minor = element_blank())
-ggsave("Wet_dD_F099.png", p, width = 7, height = 5, dpi = 300)
-p
-
-
-# Calcita MARCADA disuelta (metodo F=0,99 solo calcita marcada) por compartimento: OL, PW, CO2 del headspace y total
-# D [umol] = exceso de 13C / (F_marcaje - F_fondo);  exceso = 13C - C * F_fondo
+# Calcita MARCADA disuelta, solo parte LIQUIDA: OL, PW y total liquido (OL + PW)
+#   xs [umol de 13C] = 13C - C * F_fondo
+#   D  [umol de calcita marcada] = xs / (F_marcaje - F_fondo)
+#   ΔD de 24 h = D de la botella final - media de D de las botellas initial (mismo sitio, tratamiento y tiempo)
+# El headspace (CO2) queda FUERA hasta decidir el fondo de 13C del CO2.
+# Necesita en memoria: `pl` y la funcion `num`
 library(dplyr); library(tidyr); library(ggplot2); library(stringr)
 
 F_marcaje <- 0.9999            # enriquecimiento del reactivo (99,99 %)
-# Fondo por compartimento. Por ahora el mismo (Viladrau, -16,3 permil); cambialo si decides otro
-F_fondo <- c(OL = 0.010878323, PW = 0.010878323, CO2 = 0.010878323)
-dias_inc <- 1
+F_fondo   <- 0.010878323       # fondo = Viladrau, d13C = -16,3 permil (OL y PW)
+dias_inc  <- 1
+x_traz    <- c(A = 0.00552, B = 0.00471)   # fraccion de trazador / calcita total (para pasar a calcita total, opcional)
 
 d <- pl %>%
   transmute(
@@ -87,28 +20,29 @@ d <- pl %>%
     trt    = factor(treatment, levels = c("Dry", "Wet")),
     site   = factor(site, levels = c("A", "B")),
     Sed_dry_g = num(Sed_init_dry_g),
-    C_OL  = num(DIC_OL_bottle_mmol) * 1000,   C13_OL  = num(`13DIC_OL_bottle_umol`),
-    C_PW  = num(DIC_PW_bottle_mmol) * 1000,   C13_PW  = num(`13DIC_PW_bottle_umol`),
-    C_CO2 = num(`mmol de CO2`) * 1000,        C13_CO2 = num(`13CO2_umol`)
+    C_OL  = num(DIC_OL_bottle_mmol) * 1000,   C13_OL  = num(`13DIC_OL_bottle_umol`),   # umol
+    C_PW  = num(DIC_PW_bottle_mmol) * 1000,   C13_PW  = num(`13DIC_PW_bottle_umol`)    # umol
   ) %>%
   filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage)) %>%
+  # Un 0 en el carbono o en el 13C significa "no medido" (celda vacia convertida en 0 por una formula): se trata como NA
+  mutate(across(c(C_OL, C13_OL, C_PW, C13_PW), ~ ifelse(.x <= 0, NA_real_, .x))) %>%
   mutate(
-    D_OL  = (C13_OL  - C_OL  * F_fondo["OL"])  / (F_marcaje - F_fondo["OL"]),
-    D_PW  = (C13_PW  - C_PW  * F_fondo["PW"])  / (F_marcaje - F_fondo["PW"]),
-    D_CO2 = (C13_CO2 - C_CO2 * F_fondo["CO2"]) / (F_marcaje - F_fondo["CO2"]),
-    D_Total = D_OL + D_PW + D_CO2        # NA si falta algun compartimento
+    xs_OL = C13_OL - C_OL * F_fondo,                    # exceso de 13C
+    xs_PW = C13_PW - C_PW * F_fondo,
+    D_OL  = xs_OL / (F_marcaje - F_fondo),              # calcita marcada disuelta
+    D_PW  = xs_PW / (F_marcaje - F_fondo),
+    D_Liquido = D_OL + D_PW                              # NA si falta OL o PW
   )
 
-# 0) cuantas botellas tienen dato por compartimento
+# 0) cuantas botellas tienen dato
+cat("\n--- botellas con dato por compartimento ---\n")
 d %>% group_by(trt, tiempo, stage) %>%
-  summarise(n = n(), OL = sum(!is.na(D_OL)), PW = sum(!is.na(D_PW)),
-            CO2 = sum(!is.na(D_CO2)), Total = sum(!is.na(D_Total)), .groups = "drop") %>% print(n = Inf)
+  summarise(n = n(), OL = sum(!is.na(D_OL)), PW = sum(!is.na(D_PW)), Liquido = sum(!is.na(D_Liquido)), .groups = "drop") %>% print(n = Inf)
 
 # 1) Delta final - media initial, por compartimento
-largo <- d %>% pivot_longer(c(D_OL, D_PW, D_CO2, D_Total), names_to = "comp", values_to = "D") %>%
-  mutate(comp = factor(comp, levels = c("D_OL", "D_PW", "D_CO2", "D_Total"),
-                       labels = c("OL (overlying water)", "PW (porewater)", "CO2 (headspace)", "Total"))) %>%
-  filter(!is.na(D))
+etiq <- c(D_OL = "OL (agua suprayacente)", D_PW = "PW (agua de poro)", D_Liquido = "Total líquido (OL + PW)")
+largo <- d %>% pivot_longer(c(D_OL, D_PW, D_Liquido), names_to = "comp", values_to = "D") %>%
+  mutate(comp = factor(comp, levels = names(etiq), labels = unname(etiq))) %>% filter(!is.na(D))
 
 base_I <- largo %>% filter(stage == "initial") %>%
   group_by(tiempo, site, trt, comp) %>% summarise(D_I = mean(D), .groups = "drop")
@@ -116,57 +50,111 @@ fin <- largo %>% filter(stage == "final") %>%
   left_join(base_I, by = c("tiempo", "site", "trt", "comp")) %>%
   mutate(dD = D - D_I) %>% filter(!is.na(dD))
 
-est <- largo %>% group_by(tiempo, site, trt, comp, stage) %>%
-  summarise(m = mean(D), sd = sd(D), .groups = "drop") %>%
-  pivot_wider(names_from = stage, values_from = c(m, sd)) %>%
-  mutate(dD = m_final - m_initial, dD_sd = sqrt(sd_final^2 + sd_initial^2),
-         distinguible = abs(dD) > 2 * dD_sd) %>% filter(!is.na(dD))
-print(est %>% filter(trt == "Wet") %>% select(site, tiempo, comp, dD, dD_sd, distinguible) %>%
-        arrange(comp, site, tiempo), n = Inf)
+masa_sitio <- d %>% group_by(site) %>% summarise(masa = mean(Sed_dry_g, na.rm = TRUE), .groups = "drop")
 
-# 2) Figura: Wet, un panel por compartimento
+est <- largo %>% group_by(tiempo, site, trt, comp, stage) %>%
+  summarise(m = mean(D), sd = sd(D), n = n(), .groups = "drop") %>%
+  pivot_wider(names_from = stage, values_from = c(m, sd, n)) %>%
+  mutate(dD = m_final - m_initial, dD_sd = sqrt(sd_final^2 + sd_initial^2),
+         distinguible = abs(dD) > 2 * dD_sd) %>%
+  filter(!is.na(dD)) %>%
+  left_join(masa_sitio, by = "site") %>%
+  mutate(dD_calcita_total = dD / x_traz[as.character(site)],      # opcional: escala a calcita total
+         tasa_umol_g_d = dD / dias_inc / masa)                    # tasa de calcita marcada
+
+tabla <- est %>% select(trt, site, tiempo, comp, dD, dD_sd, distinguible, tasa_umol_g_d, dD_calcita_total) %>%
+  arrange(comp, trt, site, tiempo)
+cat("\n--- ΔD (µmol de calcita marcada disuelta en 24 h) ---\n")
+print(tabla %>% mutate(across(c(dD, dD_sd, tasa_umol_g_d, dD_calcita_total), ~ signif(.x, 3))), n = Inf)
+write.csv2(tabla, "Disolucion_liquida_tabla.csv", row.names = FALSE)     # para Excel / PowerPoint
+
+# 2) Figura: un panel por compartimento (columnas) y tratamiento (filas)
 col_site <- c(A = "#1A1A1A", B = "#D81B60")
 dod <- position_dodge(width = 0.25)
 p <- ggplot() +
   geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
-  geom_point(data = fin %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
+  geom_point(data = fin, aes(tiempo, dD, colour = site),
              position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1),
              size = 1.4, alpha = 0.5) +
-  geom_line(data = est %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site, group = site),
-            position = dod, linewidth = 0.6) +
-  geom_errorbar(data = est %>% filter(trt == "Wet"),
-                aes(tiempo, ymin = dD - dD_sd, ymax = dD + dD_sd, colour = site),
+  geom_line(data = est, aes(tiempo, dD, colour = site, group = site), position = dod, linewidth = 0.6) +
+  geom_errorbar(data = est, aes(tiempo, ymin = dD - dD_sd, ymax = dD + dD_sd, colour = site),
                 position = dod, width = 0.2, linewidth = 0.4) +
-  geom_point(data = est %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
-             position = dod, shape = 18, size = 4) +
-  facet_wrap(~ comp, nrow = 1, scales = "free_y") +
+  geom_point(data = est, aes(tiempo, dD, colour = site), position = dod, shape = 18, size = 4) +
+  facet_grid(trt ~ comp, scales = "free_y") +
   scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
   scale_y_continuous(labels = function(x) sprintf("%.3f", x)) +
   scale_colour_manual(values = col_site, name = "Sitio") +
   labs(x = NULL, y = "ΔD calcita marcada disuelta en 24 h (µmol)",
-       title = "Wet: disolución de calcita marcada por compartimento (F = 0,9999)",
-       caption = "Compartimentos: OL = agua suprayacente; PW = agua de poro; CO2 = gas del headspace; Total = suma (solo botellas con los tres).\nPuntos = cada botella final − media initial; rombo = promedio; barras = SD combinada.") +
+       title = "Disolución de calcita marcada en la parte líquida",
+       caption = "xs = 13C − C × F_fondo (Viladrau, −16,3 ‰); D = xs / (F_marcaje − F_fondo), F_marcaje = 0,9999.\nPuntos = botella final − media initial; rombo = promedio; barras = SD combinada. Dry solo tiene agua en t0 (y PW parcial en t1).") +
   theme_minimal(base_size = 12) +
   theme(legend.position = "bottom", panel.grid.minor = element_blank(),
         strip.text = element_text(face = "bold"))
-ggsave("Wet_dD_F=0,99_compartimentos.png", p, width = 11, height = 4.8, dpi = 300)
+ggsave("Disolucion_liquida.png", p, width = 11, height = 6.5, dpi = 300)
 p
 
+# =====================================================================================================
+# 3) SOLO t0: disolucion de calcita marcada en las primeras 24 h (Dry y Wet, por sitio y compartimento)
+# =====================================================================================================
+t0_tabla <- est %>% filter(tiempo == 0) %>%
+  select(trt, site, comp, dD, dD_sd, distinguible, tasa_umol_g_d, dD_calcita_total) %>%
+  arrange(comp, trt, site)
+cat("\n=== SOLO t0: ΔD (µmol de calcita marcada disuelta en 24 h) ===\n")
+print(t0_tabla %>% mutate(across(c(dD, dD_sd, tasa_umol_g_d, dD_calcita_total), ~ signif(.x, 3))), n = Inf)
+write.csv2(t0_tabla, "Disolucion_liquida_t0_tabla.csv", row.names = FALSE)
 
-# Calcita TOTAL disuelta (tu metodo) por compartimento: OL, PW, CO2 del headspace y total
-# D [umol] = (13C_neto - C_neto * F_resp) / (F_calc - F_resp)
-#   C_neto, 13C_neto = lo medido menos lo que entro con Viladrau / agua inicial (columnas DX-EC de tu planilla)
-# OJO: F_resp y F_calc son supuestos PROVISIONALES (aparcados para el final del capitulo)
+# Dry vs Wet en t0 (t de Welch sobre las botellas finales - media initial)
+cat("\n--- t0: Dry vs Wet (t de Welch) ---\n")
+t0_test <- fin %>% filter(tiempo == 0) %>% group_by(comp, site) %>% group_modify(~ {
+  a <- .x$dD[.x$trt == "Dry"]; b <- .x$dD[.x$trt == "Wet"]
+  if (length(a) < 2 || length(b) < 2) return(tibble(media_Dry = NA_real_, media_Wet = NA_real_, p = NA_real_))
+  tibble(media_Dry = mean(a), media_Wet = mean(b), p = t.test(a, b)$p.value)
+}) %>% ungroup()
+print(t0_test %>% mutate(across(c(media_Dry, media_Wet), ~ signif(.x, 3)), p = round(p, 3)), n = Inf)
+
+fin0 <- fin %>% filter(tiempo == 0); est0 <- est %>% filter(tiempo == 0)
+
+# Tabla de t0 con Dry y Wet lado a lado (para la diapositiva): ΔD ± SD (µmol de calcita marcada en 24 h), p de Welch y p ajustada (Holm)
+t0_ancho <- est0 %>%
+  mutate(txt = sprintf("%.4f ± %.4f%s", dD, dD_sd, ifelse(distinguible, " *", ""))) %>%
+  select(comp, site, trt, txt) %>% pivot_wider(names_from = trt, values_from = txt) %>%
+  left_join(t0_test %>% mutate(p_Holm = p.adjust(p, "holm")) %>% select(comp, site, p, p_Holm), by = c("comp", "site")) %>%
+  mutate(across(c(p, p_Holm), ~ round(.x, 3))) %>% arrange(comp, site)
+cat("\n=== t0: Dry y Wet lado a lado (ΔD ± SD, µmol; * = distinguible del ruido) ===\n")
+print(t0_ancho, n = Inf, width = Inf)
+write.csv2(t0_ancho, "Disolucion_liquida_t0_Dry_vs_Wet.csv", row.names = FALSE)
+p0 <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+  geom_point(data = fin0, aes(trt, dD, colour = site),
+             position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.5, seed = 1), size = 1.6, alpha = 0.55) +
+  geom_errorbar(data = est0, aes(trt, ymin = dD - dD_sd, ymax = dD + dD_sd, colour = site),
+                position = position_dodge(width = 0.5), width = 0.2, linewidth = 0.4) +
+  geom_point(data = est0, aes(trt, dD, colour = site), position = position_dodge(width = 0.5), shape = 18, size = 4.5) +
+  facet_wrap(~ comp, nrow = 1, scales = "free_y") +
+  scale_y_continuous(labels = function(x) sprintf("%.3f", x)) +
+  scale_colour_manual(values = col_site, name = "Sitio") +
+  labs(x = NULL, y = "ΔD calcita marcada disuelta en 24 h (µmol)",
+       title = "t0: disolución de calcita marcada en las primeras 24 h (parte líquida)",
+       caption = " (F_fondo = Viladrau, F_marcaje = 0,9999). Puntos = botella final − media initial; rombo = promedio; barras = SD combinada.") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank(), strip.text = element_text(face = "bold"))
+ggsave("Disolucion_liquida_t0.png", p0, width = 10, height = 4.8, dpi = 300)
+p0
+
+# Calcita TOTAL disuelta (el otro metodo) por compartimento: OL, PW
+# Calcita TOTAL disuelta (marcada + nativa), "mi metodo", solo parte LIQUIDA: OL, PW y total liquido (OL + PW)
+# Mismo exceso de 13C que el metodo del tutor, pero dividido por la F de la calcita TOTAL (trazador + nativa):
+#   xs = 13C - C * F_fondo        (F_fondo = Viladrau; no se resta Viladrau ni se usa ninguna respiracion)
+#   D  = xs / (F_calc - F_fondo)
+# D sale en µmol de CaCO3 total (marcada + nativa) disueltos en 24 h, POR BOTELLA.
+# Necesita en memoria: `pl` y la funcion `num`
 library(dplyr); library(tidyr); library(ggplot2); library(stringr)
 
-F_resp <- 0.010783151                              # respiracion, d13C = -25 permil (supuesto)
-F_calc <- c(A = 0.015909369, B = 0.014858)         # F de la calcita total por sitio (tu calculo)
+F_fondo  <- 0.010878323                # Viladrau, d13C = -16,3 permil
+# F de la calcita total por sitio = mezcla trazador + nativa. ACTUALIZADO con: 48 mg (A) y 43 mg (B) de reactivo,
+# pureza 0,998, masa seca 17,893 g (A) y 18,778 g (B), 47,8 % de calcita nativa, d13C nativo -4,97 (A) y -3,84 (B), F_marcaje 0,9999
+F_calc   <- c(A = 0.016456495, B = 0.015674124)
 dias_inc <- 1
-
-necesarias <- c("C_neto_OL", "C_neto_PW", "C_neto_CO2", "13C_neto_OL", "13C_neto_PW", "13C_neto_CO2",
-                "D_OL_umol", "D_PW_umol", "D_CO2_umol", "D_tt")
-faltan <- setdiff(necesarias, names(pl))
-if (length(faltan) > 0) stop("Faltan columnas en la planilla: ", paste(faltan, collapse = ", "))
 
 d <- pl %>%
   transmute(
@@ -176,72 +164,88 @@ d <- pl %>%
     trt    = factor(treatment, levels = c("Dry", "Wet")),
     site   = factor(site, levels = c("A", "B")),
     Sed_dry_g = num(Sed_init_dry_g),
-    C_OL  = num(C_neto_OL),  C13_OL  = num(`13C_neto_OL`),
-    C_PW  = num(C_neto_PW),  C13_PW  = num(`13C_neto_PW`),
-    C_CO2 = num(C_neto_CO2), C13_CO2 = num(`13C_neto_CO2`),
-    # tus D de la planilla, solo para comprobar
-    D_OL_xl = num(D_OL_umol), D_PW_xl = num(D_PW_umol), D_CO2_xl = num(D_CO2_umol), D_tt_xl = num(D_tt)
+    C_OL  = num(DIC_OL_bottle_mmol) * 1000,  C13_OL = num(`13DIC_OL_bottle_umol`),     # umol medidos en la botella
+    C_PW  = num(DIC_PW_bottle_mmol) * 1000,  C13_PW = num(`13DIC_PW_bottle_umol`)
   ) %>%
   filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage)) %>%
   mutate(
-    Fc = F_calc[as.character(site)],
-    D_OL  = (C13_OL  - C_OL  * F_resp) / (Fc - F_resp),
-    D_PW  = (C13_PW  - C_PW  * F_resp) / (Fc - F_resp),
-    D_CO2 = (C13_CO2 - C_CO2 * F_resp) / (Fc - F_resp),
-    D_Total = D_OL + D_PW + D_CO2
+    # un 0 en el carbono o en el 13C medido = "no medido" (celda vacia convertida en 0): no cuenta
+    ok_OL = !is.na(C_OL) & !is.na(C13_OL) & C_OL > 0 & C13_OL > 0,
+    ok_PW = !is.na(C_PW) & !is.na(C13_PW) & C_PW > 0 & C13_PW > 0,
+    Fc = F_calc[as.character(site)]
   )
 
-# 0) comprobacion contra tu Excel (debe dar ~0) y datos disponibles
-cat("Diferencia maxima con tus columnas de Excel:\n")
-print(d %>% summarise(OL = max(abs(D_OL - D_OL_xl), na.rm = TRUE), PW = max(abs(D_PW - D_PW_xl), na.rm = TRUE),
-                      CO2 = max(abs(D_CO2 - D_CO2_xl), na.rm = TRUE), Total = max(abs(D_Total - D_tt_xl), na.rm = TRUE)))
+d <- d %>% mutate(
+  xs_OL = C13_OL - C_OL * F_fondo,                       # exceso de 13C sobre el fondo (Viladrau)
+  xs_PW = C13_PW - C_PW * F_fondo,
+  D_OL = ifelse(ok_OL, xs_OL / (Fc - F_fondo), NA_real_),   # umol de CaCO3 total disuelto
+  D_PW = ifelse(ok_PW, xs_PW / (Fc - F_fondo), NA_real_),
+  D_Liquido = D_OL + D_PW                                # NA si falta OL o PW
+)
+
+# 0) cuantas botellas tienen dato
+cat("\n--- botellas con dato por compartimento ---\n")
 d %>% group_by(trt, tiempo, stage) %>%
-  summarise(n = n(), OL = sum(!is.na(D_OL)), PW = sum(!is.na(D_PW)),
-            CO2 = sum(!is.na(D_CO2)), Total = sum(!is.na(D_Total)), .groups = "drop") %>% print(n = Inf)
+  summarise(n = n(), OL = sum(!is.na(D_OL)), PW = sum(!is.na(D_PW)), Liquido = sum(!is.na(D_Liquido)), .groups = "drop") %>% print(n = Inf)
 
 # 1) Delta final - media initial, por compartimento
-largo <- d %>% pivot_longer(c(D_OL, D_PW, D_CO2, D_Total), names_to = "comp", values_to = "D") %>%
-  mutate(comp = factor(comp, levels = c("D_OL", "D_PW", "D_CO2", "D_Total"),
-                       labels = c("OL (overlying water)", "PW (porewater)", "CO2 (headspace)", "Total"))) %>%
-  filter(!is.na(D))
+etiq <- c(D_OL = "OL (agua suprayacente)", D_PW = "PW (agua de poro)", D_Liquido = "Total líquido (OL + PW)")
+largo <- d %>% pivot_longer(c(D_OL, D_PW, D_Liquido), names_to = "comp", values_to = "D") %>%
+  mutate(comp = factor(comp, levels = names(etiq), labels = unname(etiq))) %>% filter(!is.na(D))
 
 base_I <- largo %>% filter(stage == "initial") %>%
   group_by(tiempo, site, trt, comp) %>% summarise(D_I = mean(D), .groups = "drop")
-fin_m <- largo %>% filter(stage == "final") %>%
+fin <- largo %>% filter(stage == "final") %>%
   left_join(base_I, by = c("tiempo", "site", "trt", "comp")) %>%
-  mutate(dD = D - D_I, tasa_umol_g_d = dD / dias_inc / Sed_dry_g) %>% filter(!is.na(dD))
+  mutate(dD = D - D_I) %>% filter(!is.na(dD))
 
-est_m <- largo %>% group_by(tiempo, site, trt, comp, stage) %>%
+masa_sitio <- d %>% group_by(site) %>% summarise(masa = mean(Sed_dry_g, na.rm = TRUE), .groups = "drop")
+
+est <- largo %>% group_by(tiempo, site, trt, comp, stage) %>%
   summarise(m = mean(D), sd = sd(D), .groups = "drop") %>%
   pivot_wider(names_from = stage, values_from = c(m, sd)) %>%
   mutate(dD = m_final - m_initial, dD_sd = sqrt(sd_final^2 + sd_initial^2),
-         distinguible = abs(dD) > 2 * dD_sd) %>% filter(!is.na(dD))
-print(est_m %>% filter(trt == "Wet") %>% select(site, tiempo, comp, dD, dD_sd, distinguible) %>%
-        arrange(comp, site, tiempo), n = Inf)
+         distinguible = abs(dD) > 2 * dD_sd) %>%
+  filter(!is.na(dD)) %>% left_join(masa_sitio, by = "site") %>%
+  mutate(tasa_umol_g_d = dD / dias_inc / masa)
 
-# 2) Figura: Wet, un panel por compartimento
-col_site <- c(A = "#1A1A1A", B = "#D81B60")
-dod <- position_dodge(width = 0.25)
+tabla <- est %>% select(trt, site, tiempo, comp, dD, dD_sd, distinguible, tasa_umol_g_d) %>% arrange(comp, trt, site, tiempo)
+cat("\n--- ΔD (µmol de CaCO3 total disuelto en 24 h, por botella) ---\n")
+print(tabla %>% mutate(across(c(dD, dD_sd, tasa_umol_g_d), ~ signif(.x, 3))), n = Inf)
+write.csv2(tabla, "Disolucion_mi_metodo_liquida_tabla.csv", row.names = FALSE)
+
+# 2) Figura: Dry y Wet (filas) por compartimento (columnas)
+col_site <- c(A = "#1A1A1A", B = "#D81B60"); dod <- position_dodge(width = 0.25)
 p_m <- ggplot() +
   geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40", linewidth = 0.4) +
-  geom_point(data = fin_m %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
-             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1),
-             size = 1.4, alpha = 0.5) +
-  geom_line(data = est_m %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site, group = site),
-            position = dod, linewidth = 0.6) +
-  geom_errorbar(data = est_m %>% filter(trt == "Wet"),
-                aes(tiempo, ymin = dD - dD_sd, ymax = dD + dD_sd, colour = site),
-                position = dod, width = 0.2, linewidth = 0.4) +
-  geom_point(data = est_m %>% filter(trt == "Wet"), aes(tiempo, dD, colour = site),
-             position = dod, shape = 18, size = 4) +
-  facet_wrap(~ comp, nrow = 1, scales = "free_y") +
+  geom_point(data = fin, aes(tiempo, dD, colour = site),
+             position = position_jitterdodge(jitter.width = 0.05, dodge.width = 0.25, seed = 1), size = 1.4, alpha = 0.5) +
+  geom_line(data = est, aes(tiempo, dD, colour = site, group = site), position = dod, linewidth = 0.6) +
+  geom_errorbar(data = est, aes(tiempo, ymin = dD - dD_sd, ymax = dD + dD_sd, colour = site), position = dod, width = 0.2, linewidth = 0.4) +
+  geom_point(data = est, aes(tiempo, dD, colour = site), position = dod, shape = 18, size = 4) +
+  facet_grid(trt ~ comp, scales = "free_y") +
   scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
   scale_y_continuous(labels = function(x) sprintf("%.2f", x)) +
   scale_colour_manual(values = col_site, name = "Sitio") +
-  labs(x = NULL, y = "ΔD calcita total disuelta en 24 h (µmol)",
-       title = "Wet: disolución de calcita total por compartimento (F_calc, F_resp provisionales)",
-       caption = "Compartimentos: OL = agua suprayacente; PW = agua de poro; CO2 = gas del headspace; Total = suma.\nPuntos = cada botella final − media initial; rombo = promedio; barras = SD combinada.") +
+  labs(x = NULL, y = "ΔD calcita total disuelta en 24 h (µmol de CaCO3 por botella)",
+       title = "Disolución de calcita total, parte líquida (mi método)",
+       caption = "OL = agua suprayacente; PW = agua de poro. Puntos = botella final − media initial; rombo = promedio; barras = SD combinada.\nDry solo tiene agua en t0 (y PW parcial en t1).") +
   theme_minimal(base_size = 12) +
   theme(legend.position = "bottom", panel.grid.minor = element_blank(), strip.text = element_text(face = "bold"))
-ggsave("Wet_dD_mi_metodo_compartimentos.png", p_m, width = 11, height = 4.8, dpi = 300)
+ggsave("Disolucion_mi_metodo_liquida.png", p_m, width = 11, height = 6.5, dpi = 300)
 p_m
+
+# 3) SOLO t0, Dry y Wet lado a lado
+est0 <- est %>% filter(tiempo == 0); fin0 <- fin %>% filter(tiempo == 0)
+t0_test <- fin0 %>% group_by(comp, site) %>% group_modify(~ {
+  a <- .x$dD[.x$trt == "Dry"]; b <- .x$dD[.x$trt == "Wet"]
+  if (length(a) < 2 || length(b) < 2) return(tibble(p = NA_real_))
+  tibble(p = t.test(a, b)$p.value)
+}) %>% ungroup() %>% mutate(p_Holm = p.adjust(p, "holm"))
+t0_ancho <- est0 %>%
+  mutate(txt = sprintf("%.4f ± %.4f%s", dD, dD_sd, ifelse(distinguible, " *", ""))) %>%
+  select(comp, site, trt, txt) %>% pivot_wider(names_from = trt, values_from = txt) %>%
+  left_join(t0_test, by = c("comp", "site")) %>% mutate(across(c(p, p_Holm), ~ round(.x, 3))) %>% arrange(comp, site)
+cat("\n=== t0: Dry y Wet lado a lado (ΔD ± SD, µmol de CaCO3 total; * = distinguible del ruido) ===\n")
+print(t0_ancho, n = Inf, width = Inf)
+write.csv2(t0_ancho, "Disolucion_mi_metodo_t0_Dry_vs_Wet.csv", row.names = FALSE)
