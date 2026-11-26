@@ -1,8 +1,13 @@
 # ================================================================================================================================================================================================================================#
 #                                                                                CALCIUM, Y otros elementos!!!!!!!!!
 # ================================================================================================================================================================================================================================#
-#
-# Archivo: C:/Experimentcalcite/data/planilla_total.csv
+# Este script calcula el calcio long term y short term de las incubaciones, paa las incubaciones long term Para el script usa solo las botellas initial, mientras que para las incubaciones cerradas de 24h el script considera  
+# el delta como el neto de cada botella final menos la media de las initial del mismo tiempo, sitio y tratamiento.
+# Cada tiempo se compara con sus propias initial, no con las de t0.
+# La parte inicial del script calcula las variaciones del Ca en la fase líquida, mientras que la parte final lo hace en la fase sólida
+# 
+# 
+Archivo: C:/Experimentcalcite/data/planilla_total.csv
 #
 # Compartimentos (solo las aguas):
 #   OL = agua suprayacente   (entrada: Viladrau total añadida; el agua nativa se decantó al inicio)
@@ -396,156 +401,3 @@ ggsave(file.path(carpeta_out, "Ca_solido_fig1_evolucion.png"),                 p
 ggsave(file.path(carpeta_out, "Ca_solido_fig2_delta.png"),                     p_sol2, width = 10, height = 4.5, dpi = 300)
 ggsave(file.path(carpeta_out, paste0("Ca_solido_fig3_masa_", etapa_masa, ".png")), p_sol3, width = 10, height = 4.5, dpi = 300)
 
-# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
-#                                                                                       8. Ω (SI) y Ca del agua — SOLO WET — OL y PW
-# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------#
-# Constantes a 24 °C. Aproximado: sirve para comparar tiempos, no como valor absoluto.
-omega_calcita <- function(pH, DIC_mM, Ca_mM, Mg_ppm, Na_ppm,
-                          pK1 = 6.35, pK2 = 10.34, pKsp = 8.48) {
-  I  <- (3*Ca_mM + 3*Mg_ppm/24.305 + Na_ppm/22.99) / 1000
-  s  <- sqrt(I)
-  g2 <- 10^(-0.509 * 4 * (s/(1 + s) - 0.3*I))
-  H  <- 10^(-pH); K1 <- 10^(-pK1); K2 <- 10^(-pK2)
-  a2 <- 1 / (1 + H/K2 + H^2/(K1*K2))
-  g2^2 * (DIC_mM/1000 * a2) * (Ca_mM/1000) / 10^(-pKsp)
-}
-
-# Captura segura de las columnas con símbolo delta
-col_d13_OL  <- grep("^13DIC_OL", names(pl), value = TRUE)[1]
-col_d13_PW  <- grep("^13DIC_PW", names(pl), value = TRUE)[1]
-col_d13_CO2 <- grep("^13_CO2",   names(pl), value = TRUE)[1]
-
-# 1) Tabla larga: una fila por botella y compartimento (OL, PW), solo Wet
-base <- pl %>%
-  transmute(
-    sample_id,
-    tiempo  = as.integer(gsub("\\D", "", extraction_time)),
-    stage   = factor(tolower(stage), levels = c("initial", "final")),
-    trt     = factor(treatment, levels = c("Dry", "Wet")),
-    site    = factor(site, levels = c("A", "B")),
-    OL_pH   = ph_ok(pH_OL),   OL_DIC = num(DIC_OL_mM), OL_Ca = num(Ca_OL_mM),
-    OL_Mg   = num(Mg_OL_ppm), OL_Na = num(Na_OL_ppm), OL_d13 = num(.data[[col_d13_OL]]),
-    OL_C    = num(DIC_OL_bottle_mmol) * 1000, OL_C13 = num(`13DIC_OL_bottle_umol`),   # umol de C y de 13C en el OL
-    CO2_ppm = num(CO2_corrected_ppm), d13CO2 = num(.data[[col_d13_CO2]]),
-    PW_pH   = ph_ok(pH_PW),   PW_DIC = num(DIC_PW_mM), PW_Ca = num(Ca_PW_mM),
-    PW_Mg   = num(Mg_PW_ppm), PW_Na = num(Na_PW_ppm), PW_d13 = num(.data[[col_d13_PW]]),
-    PW_C    = num(DIC_PW_bottle_mmol) * 1000, PW_C13 = num(`13DIC_PW_bottle_umol`)
-  ) %>%
-  filter(trt == "Wet", !is.na(site), !is.na(tiempo), !is.na(stage))
-
-mk <- function(d, pre, nombre) {
-  tibble(sample_id = d$sample_id, tiempo = d$tiempo, stage = d$stage, site = d$site,
-         comp = nombre,
-         Ca_mM = d[[paste0(pre, "_Ca")]],
-         DIC_mM = d[[paste0(pre, "_DIC")]],
-         d13DIC = d[[paste0(pre, "_d13")]],
-         pH = d[[paste0(pre, "_pH")]],
-         Na_ppm = d[[paste0(pre, "_Na")]],
-         Mg_ppm = d[[paste0(pre, "_Mg")]],
-         CaNa = d[[paste0(pre, "_Ca")]] / (d[[paste0(pre, "_Na")]] / 22.99),
-         # calcita marcada disuelta (metodo del tutor): exceso de 13C / (F_marcaje - F_fondo), en umol por botella
-         D = (d[[paste0(pre, "_C13")]] - d[[paste0(pre, "_C")]] * F_fondo) / (F_marcaje - F_fondo),
-         Omega = if_else(!is.na(d[[paste0(pre, "_DIC")]]) & d[[paste0(pre, "_DIC")]] > 0.5,
-                         omega_calcita(d[[paste0(pre, "_pH")]], d[[paste0(pre, "_DIC")]],
-                                       d[[paste0(pre, "_Ca")]], d[[paste0(pre, "_Mg")]],
-                                       d[[paste0(pre, "_Na")]]), NA_real_))
-}
-agua <- bind_rows(mk(base, "OL", "OL (overlying water)"), mk(base, "PW", "PW (porewater)")) %>%
-  mutate(SI = log10(Omega))          # SI = log10(Ω); SI > 0 = sobresaturada
-
-# 2) Revisar: mediana de Ω por compartimento, sitio y tiempo
-agua %>% group_by(comp, site, tiempo) %>%
-  summarise(n = sum(!is.na(Omega)), Omega_mediana = round(median(Omega, na.rm = TRUE), 1),
-            .groups = "drop") %>% arrange(comp, site, tiempo) %>% print(n = Inf)
-
-# 3) Función de figura multi-variable (OL y PW en columnas, una fila por variable)
-dd <- position_dodge(width = 0.25)
-f2 <- function(x) sprintf("%.2f", x)
-# Decimales según la magnitud de cada panel: >=100 sin decimales (µM, ppm), >=10 un decimal, menor 2 decimales
-eje_auto <- function(x) {
-  r <- max(abs(x), na.rm = TRUE)
-  d <- if (r >= 100) 0 else if (r >= 10) 1 else if (r >= 0.1) 2 else 3
-  sprintf(paste0("%.", d, "f"), x)
-}
-
-# media geometrica: log10(media geometrica de Omega) = media de SI -> Omega y SI coherentes
-media_geo <- function(x) exp(mean(log(x)))
-fig_multi <- function(d, vars, etiquetas, titulo, columnas = "comp", caption = NULL, escalas = "free_y",
-                      fun_media = mean) {
-  largo <- d %>% pivot_longer(all_of(vars), names_to = "variable", values_to = "valor") %>%
-    filter(!is.na(valor)) %>%
-    mutate(variable = factor(variable, levels = vars, labels = etiquetas))
-  m <- largo %>% group_by(across(all_of(c(columnas, "variable", "site", "tiempo")))) %>%
-    summarise(v = fun_media(valor), .groups = "drop")
-  ggplot(largo, aes(tiempo, valor, color = site)) +
-    geom_point(position = dj, size = 1.2, alpha = 0.6) +
-    geom_line(data = m, aes(y = v, group = site), position = dd, linewidth = 0.6) +
-    geom_point(data = m, aes(y = v), position = dd, shape = 18, size = 4) +
-    facet_grid(as.formula(paste("variable ~", columnas)), scales = escalas, switch = "y") +
-    scale_x_continuous(breaks = 0:4, labels = paste0("t", 0:4)) +
-    scale_color_manual(values = col_site, name = "Sitio") +
-    scale_y_continuous(labels = eje_auto) +
-    labs(x = NULL, y = NULL, title = titulo, caption = caption) +
-    tema +
-    theme(strip.placement = "outside")
-}
-
-cap_aguas <- "Compartimentos: OL = overlying water (agua suprayacente); PW = porewater (agua de poro). Cada panel es un compartimento, no una suma."
-
-# Figura 1: Ω del OL y del PW (una fila)
-p_omega <- fig_multi(agua, "Omega", "Ω calcita", "Wet: Ω de calcita (OL y PW)", fun_media = media_geo,
-                     caption = paste0(cap_aguas, " Línea y rombo = media geométrica (su log10 es el SI medio).")) +
-  theme(strip.text.y.left = element_text(size = 9))
-
-# Figura 2: carbonato (SI, Ca, DIC, δ13C-DIC, pH)
-# δ13C-DIC = razón isotópica respecto al estándar VPDB (‰), no una concentración
-p_SI_Ca <- fig_multi(agua, c("SI", "Ca_mM", "DIC_mM", "d13DIC", "pH", "D"),
-                     c("SI\n(log10 Ω)", "Ca\n(mM)", "DIC\n(mM)", "δ13C-DIC\n(‰ VPDB)", "pH", "D calcita marcada\n(µmol)"),
-                     "Wet: SI, Ca, DIC, δ13C-DIC, pH y calcita marcada disuelta del agua (OL y PW)",
-                     caption = paste0(cap_aguas, " D = calcita marcada disuelta acumulada por botella (método del tutor, F = 0,9999).")) +
-  theme(strip.text.y.left = element_text(size = 9))
-
-# Figura 3: elementos del agua, TODOS en µM, y Ca/Mg molar
-Mmol <- c(Ca = 40.078, Mg = 24.305, Na = 22.99, Sr = 87.62, Al = 26.982)   # g/mol; µM = ppm / M * 1000
-elem <- function(pre, nombre) {
-  pl %>% transmute(
-    sample_id,
-    tiempo = as.integer(gsub("\\D", "", extraction_time)),
-    stage  = factor(tolower(stage), levels = c("initial", "final")),
-    trt    = factor(treatment, levels = c("Dry", "Wet")),
-    site   = factor(site, levels = c("A", "B")),
-    comp   = nombre,
-    Ca = num(.data[[paste0("Ca_", pre, "_ppm")]]) / Mmol["Ca"] * 1000,
-    Mg = num(.data[[paste0("Mg_", pre, "_ppm")]]) / Mmol["Mg"] * 1000,
-    Na = num(.data[[paste0("Na_", pre, "_ppm")]]) / Mmol["Na"] * 1000,
-    Sr = num(.data[[paste0("Sr_", pre, "_ppm")]]) / Mmol["Sr"] * 1000,
-    Al = num(.data[[paste0("Al_", pre, "_ppm")]]) / Mmol["Al"] * 1000
-  )
-}
-iones <- bind_rows(elem("OL", "OL (overlying water)"), elem("PW", "PW (porewater)")) %>%
-  filter(trt == "Wet", !is.na(site), !is.na(tiempo), !is.na(stage)) %>%
-  mutate(Al   = if_else(Al > 0, Al, NA_real_),   # Al <= 0 = bajo el límite de detección: se deja en blanco
-         CaMg = Ca / Mg)
-
-p_iones <- fig_multi(iones, c("Ca", "Mg", "Na", "Sr", "Al", "CaMg"),
-                     c("Ca\n(µM)", "Mg\n(µM)", "Na\n(µM)", "Sr\n(µM)", "Al\n(µM)", "Ca/Mg\n(molar)"),
-                     "Wet: elementos del agua en µM y Ca/Mg (OL y PW)", caption = cap_aguas) +
-  theme(strip.text.y.left = element_text(size = 9))
-
-# Figura 4: headspace (CO2 y δ13CO2); no hay OL/PW, es el gas de la botella
-hs <- base %>% transmute(sample_id, tiempo, stage, site, comp = "Headspace (24 h cerrado)",
-                         CO2_ppm, d13CO2)
-p_CO2 <- fig_multi(hs, c("CO2_ppm", "d13CO2"), c("CO2\n(ppm)", "δ13C-CO2\n(‰ VPDB)"),
-                   "Wet: CO2 del headspace",
-                   caption = "Compartimento: headspace (gas de la botella durante las 24 h cerradas).") +
-  theme(strip.text.y.left = element_text(size = 9))
-
-print(p_omega)
-print(p_SI_Ca)
-print(p_iones)
-print(p_CO2)
-
-ggsave(file.path(carpeta_out, "Wet_fig1_Omega.png"),  p_omega, width = 8, height = 4.5, dpi = 300)
-ggsave(file.path(carpeta_out, "Wet_fig2_SI_Ca.png"),  p_SI_Ca, width = 8, height = 11,  dpi = 300)
-ggsave(file.path(carpeta_out, "Wet_fig3_iones.png"),  p_iones, width = 8, height = 10, dpi = 300)
-ggsave(file.path(carpeta_out, "Wet_fig4_CO2.png"),    p_CO2,   width = 6, height = 5,   dpi = 300)
