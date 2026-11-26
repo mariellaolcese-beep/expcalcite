@@ -7,7 +7,7 @@
 # La parte inicial del script calcula las variaciones del Ca en la fase líquida, mientras que la parte final lo hace en la fase sólida
 # 
 # 
-Archivo: C:/Experimentcalcite/data/planilla_total.csv
+#Archivo: C:/Experimentcalcite/data/planilla_total.csv
 #
 # Compartimentos (solo las aguas):
 #   OL = agua suprayacente   (entrada: Viladrau total añadida; el agua nativa se decantó al inicio)
