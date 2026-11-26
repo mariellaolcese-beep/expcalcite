@@ -1,14 +1,62 @@
-# =====================================================================================================
-#  DIC y δ13C-DIC (13DIC): LARGO PLAZO Y DELTA 24 h (ROMBO DE PROMEDIO + PUNTOS INDIVIDUALES)
-#  Lee la planilla_total.csv
-#  Qué hace:
-#   1. Genera 4 gráficos (facetados por capa OL y PW; Sitio A = negro, Sitio B = rosa):
-#      - Fig 1: DIC (mM) a largo plazo (frascos initial)
-#      - Fig 2: Efecto de 24 h en el DIC (delta = cada frasco final - promedio initial)
-#      - Fig 3: δ13C-DIC (‰) a largo plazo (frascos initial)
-#      - Fig 4: Efecto de 24 h en el δ13C-DIC (delta = cada frasco final - promedio initial)
-#   2. Estadística (Shapiro, Levene, ANOVA sitio x tiempo, Tukey entre tiempos) por capa y etapa.
-# =====================================================================================================
+# ======================================================================================================================
+#  DIC Y d13C-DIC (13DIC) EN EL AGUA: EVOLUCION A LARGO PLAZO Y CAMBIO EN 24 h   (OL y PW; por defecto solo Wet)
+# ======================================================================================================================
+#
+#  DE QUE SE TRATA
+#  Mira como cambian, a lo largo del experimento (t0 a t4) y dentro de cada incubacion de 24 h, dos cosas del agua:
+#    - DIC (mM): carbono inorganico disuelto = CO2 disuelto + bicarbonato + carbonato. Sube con la respiracion y con la
+#      disolucion de calcita; baja si se desgasifica CO2 o precipita calcita.
+#    - d13C-DIC (permil vs VPDB): composicion isotopica de ese carbono. Como el reactivo de calcita esta marcado con 13C
+#      (muy pesado), un d13C-DIC que SUBE indica que entra carbono marcado (calcita marcada disuelta); uno que BAJA indica
+#      que entra carbono "ligero" (respiracion, Viladrau, CO2 del aire).
+#  Compartimentos: OL = agua suprayacente; PW = agua de poro; TOTAL = OL + PW. Sitio A = MO baja (negro); Sitio B = MO alta (rosa).
+#
+#  SOBRE EL "TOTAL" (OL + PW)
+#    - El DIC en mM es una CONCENTRACION y no se puede sumar entre compartimentos. Por eso el Total se calcula con la MASA por
+#      botella: DIC (mmol) = DIC_OL_bottle_mmol + DIC_PW_bottle_mmol (Figs. 5 y 6).
+#    - El d13C-DIC del Total es la media PONDERADA por masa: d13C = ((F/(1-F))/R_VPDB - 1) x 1000, con
+#      F = (13C_OL + 13C_PW) / (C_OL + C_PW) a partir de 13DIC_*_bottle_umol y DIC_*_bottle_mmol. R_VPDB = 0,0111802 (estandar).
+#    - El Total solo se calcula si la botella tiene OL y PW medidos (un 0 en la masa se trata como "no medido").
+#    - Al empezar, el script imprime un chequeo: el d13C calculado con las masas debe parecerse al d13C medido. Si la diferencia
+#      es grande, hay un problema de unidades en las columnas de masa.
+#
+#  LOGICA
+#    - LARGO PLAZO (Fig. 1 y 3): solo frascos INITIAL (estado del sistema al empezar la ventana de 24 h de cada tiempo).
+#      Cada punto es una botella distinta (se destruye al muestrear). Rombo = promedio.
+#    - DELTA 24 h (Fig. 2 y 4): cada frasco FINAL menos el promedio de los INITIAL del mismo tiempo, sitio, tratamiento y capa.
+#      Es lo que paso dentro del cierre de 24 h. Si los puntos quedan a ambos lados del 0, el signo no es consistente.
+#
+#  QUE NECESITA
+#  planilla_total.csv con: sample_id, extraction_time, stage, treatment, site, DIC_OL_mM, DIC_PW_mM, 13DIC_OL_d y 13DIC_PW_d
+#  (las dos ultimas con la letra delta; si Excel la guardo como "?", el script la cambia), y para el Total:
+#  DIC_OL_bottle_mmol, DIC_PW_bottle_mmol, 13DIC_OL_bottle_umol, 13DIC_PW_bottle_umol.
+#  Paquetes: tidyverse, car (Levene), emmeans (Tukey).
+#
+#  PASOS
+#    0. Ajustes        rutas; trt_plot = "Wet" o "Dry"; colores por sitio
+#    1. Leer           lee la planilla, pasa a formato largo (una fila por botella y capa); DIC negativo = dato invalido -> NA
+#    2. Graficos       Fig. 1 DIC (mM) largo plazo, Fig. 2 delta DIC (mM), Fig. 3 d13C-DIC largo plazo (OL, PW, Total),
+#                      Fig. 4 delta d13C-DIC (OL, PW, Total), Fig. 5 DIC en masa largo plazo (OL, PW, Total), Fig. 6 delta DIC en masa
+#    3. Estadistica    por variable, capa y etapa (initial / final), solo el tratamiento trt_plot:
+#                        - Shapiro-Wilk por grupo (n >= 3): comprueba normalidad
+#                        - Levene: comprueba que la varianza es parecida entre grupos
+#                        - ANOVA de dos factores: sitio x tiempo (el tiempo se trata como categoria)
+#                        - Tukey entre tiempos (promediado entre sitios)
+#    4. Guardar        figuras DIC13_fig1..6_*.png y los CSV DIC13_datos_por_frasco_y_capa.csv y DIC13_delta_por_frasco_y_capa.csv
+#
+#  TABLAS QUE SALEN EN LA CONSOLA
+#    1) "Frascos con dato por variable, capa y etapa": cuantas botellas hay en cada caso (maximo 40 = 5 tiempos x 2 sitios x 4 replicas)
+#    2) Shapiro-Wilk: una fila por grupo; "normal = NO" si p < 0,05. Con n = 4 el test tiene poca potencia
+#    3) Por cada variable, capa y etapa: Levene (p), tabla ANOVA (efecto del sitio, del tiempo y de su interaccion) y Tukey
+#
+#  LIMITES A TENER EN CUENTA
+#    - DIC esta en CONCENTRACION (mM), no en masa por botella: la evaporacion lo concentra y los rellenos de Viladrau lo diluyen.
+#    - El d13C-DIC no es una cantidad de calcita disuelta: depende tambien de cuanto DIC haya. Para la masa disuelta usa los
+#      scripts de disolucion (Disolucion_tutor_compartimentos.R).
+#    - Si la interaccion sitio x tiempo es significativa, el Tukey promediado entre sitios puede engañar (aviso de R):
+#      comparar los tiempos dentro de cada sitio.
+#    - n = 4 botellas por grupo: un solo dato raro mueve el promedio de forma visible.
+# ======================================================================================================================
 
 library(tidyverse)
 library(car)        # leveneTest
@@ -23,6 +71,7 @@ codificacion <- "UTF-8"
 trt_plot     <- "Wet"                               # tratamiento a graficar ("Wet" o "Dry")
 col_site     <- c(A = "#1A1A1A", B = "#D81B60")     # Negro = Sitio A, Rosa = Sitio B
 etiq_site    <- c(A = "A (Low OM)", B = "B (High OM)")
+R_VPDB       <- 0.0111802                           # razon 13C/12C del estandar VPDB (para el d13C del TOTAL)
 
 # -----------------------------------------------------------------------------------------------------
 #  1. LEER Y ORDENAR LOS DATOS
@@ -54,21 +103,42 @@ base <- pl %>%
             trt    = factor(treatment, levels = c("Dry", "Wet")),
             site   = factor(site, levels = c("A", "B")),
             DIC_OL = num(DIC_OL_mM), DIC_PW = num(DIC_PW_mM),
-            d13_OL = num(`13DIC_OL_δ`), d13_PW = num(`13DIC_PW_δ`)) %>%
-  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage))
+            d13_OL = num(`13DIC_OL_δ`), d13_PW = num(`13DIC_PW_δ`),
+            # masa por botella (para poder sumar OL + PW): mmol de DIC y umol de 13C
+            m_OL   = num(DIC_OL_bottle_mmol), m_PW = num(DIC_PW_bottle_mmol),
+            c13_OL = num(`13DIC_OL_bottle_umol`), c13_PW = num(`13DIC_PW_bottle_umol`)) %>%
+  filter(!is.na(site), !is.na(trt), !is.na(tiempo), !is.na(stage)) %>%
+  # un 0 en la masa de C o de 13C = "no medido" (celda vacia convertida en 0): se trata como NA
+  mutate(across(c(m_OL, m_PW, c13_OL, c13_PW), ~ ifelse(.x <= 0, NA_real_, .x)))
+
+# d13C a partir de 13C y C de la botella: d = ((F / (1 - F)) / R_VPDB - 1) x 1000, con F = 13C / C
+d13_de_masas <- function(c13_umol, c_mmol) { f <- c13_umol / (c_mmol * 1000); ((f / (1 - f)) / R_VPDB - 1) * 1000 }
+
+# Chequeo: el d13C calculado con las masas debe parecerse al d13C medido (si no, hay un problema de unidades)
+cat("\nChequeo d13C medido - calculado con masas (permil, mediana y rango):\n")
+for (ly in c("OL", "PW")) {
+  dif <- d13_de_masas(base[[paste0("c13_", ly)]], base[[paste0("m_", ly)]]) - base[[paste0("d13_", ly)]]
+  cat(" ", ly, ":", round(median(dif, na.rm = TRUE), 2), " [", round(min(dif, na.rm = TRUE), 2), ",", round(max(dif, na.rm = TRUE), 2), "]\n")
+}
+
+# TOTAL (OL + PW) por botella: masa de DIC y d13C ponderado por masa. Solo si hay OL y PW.
+tot <- base %>% mutate(m_T = m_OL + m_PW,
+                       d13_T = d13_de_masas(c13_OL + c13_PW, m_OL + m_PW))
 
 # Formato largo: una fila por frasco y capa, con DIC y δ13C-DIC
+# DIC = concentracion (mM; no se puede sumar OL + PW). DICm = masa de DIC por botella (mmol; si se puede sumar).
 datos <- bind_rows(
-  base %>% transmute(sample_id, tiempo, stage, trt, site, capa = "OL", DIC = DIC_OL, d13 = d13_OL),
-  base %>% transmute(sample_id, tiempo, stage, trt, site, capa = "PW", DIC = DIC_PW, d13 = d13_PW)
+  base %>% transmute(sample_id, tiempo, stage, trt, site, capa = "OL", DIC = DIC_OL, DICm = m_OL, d13 = d13_OL),
+  base %>% transmute(sample_id, tiempo, stage, trt, site, capa = "PW", DIC = DIC_PW, DICm = m_PW, d13 = d13_PW),
+  tot  %>% transmute(sample_id, tiempo, stage, trt, site, capa = "Total", DIC = NA_real_, DICm = m_T, d13 = d13_T)
 ) %>%
-  mutate(capa = factor(capa, levels = c("OL", "PW")),
+  mutate(capa = factor(capa, levels = c("OL", "PW", "Total")),
          DIC  = if_else(DIC < 0, NA_real_, DIC),       # DIC negativo = dato inválido
          TIME = factor(tiempo, levels = 0:4))
 
-nombres_var <- c(DIC = "DIC (mM)", d13 = "δ13C-DIC (‰)")
+nombres_var <- c(DIC = "DIC (mM)", DICm = "DIC (mmol por botella)", d13 = "δ13C-DIC (‰)")
 datos_l <- datos %>%
-  pivot_longer(c(DIC, d13), names_to = "var", values_to = "v") %>%
+  pivot_longer(c(DIC, DICm, d13), names_to = "var", values_to = "v") %>%
   mutate(var = factor(nombres_var[var], levels = unname(nombres_var)))
 
 cat("\nFrascos con dato por variable, capa y etapa (", trt_plot, "):\n")
@@ -159,6 +229,12 @@ p_d13_largo <- fig_largo(nombres_var["d13"], "δ13C-DIC (‰)",
 p_d13_delta <- fig_delta(nombres_var["d13"], "Δ δ13C-DIC final - initial (‰ en 24 h)",
                          "Efecto de la incubación de 24 h en el δ13C-DIC")
 
+# DIC en MASA por botella (OL, PW y Total = OL + PW)
+p_DICm_largo <- fig_largo(nombres_var["DICm"], "DIC (mmol por botella)",
+                          "Evolución del DIC (masa) a largo plazo")
+p_DICm_delta <- fig_delta(nombres_var["DICm"], "Δ DIC final - initial (mmol por botella en 24 h)",
+                          "Efecto de la incubación de 24 h en el DIC (masa)")
+
 # -----------------------------------------------------------------------------------------------------
 #  3. ESTADÍSTICA (por variable, etapa y capa; tratamiento = trt_plot)
 # -----------------------------------------------------------------------------------------------------
@@ -170,10 +246,11 @@ datos_l %>% filter(trt == trt_plot, !is.na(v)) %>%
   mutate(normal = if_else(p_shapiro > 0.05, "SÍ", "NO")) %>% print(n = Inf)
 
 stats_var <- function(var_sel) {
-  for (et in c("initial", "final")) for (ly in c("OL", "PW")) {
+  for (et in c("initial", "final")) for (ly in c("OL", "PW", "Total")) {
     d <- datos_l %>% filter(trt == trt_plot, var == var_sel, stage == et, capa == ly, !is.na(v)) %>% droplevels()
+    d_n <- nrow(d); if (d_n == 0) next      # esa variable no existe en esa capa (p.ej. DIC en mM del Total)
     cat("\n>>>", var_sel, "|", ly, "|", et, "|", trt_plot, "<<<\n")
-    if (nlevels(d$TIME) < 2) { cat("  (menos de 2 tiempos con datos)\n"); next }
+    if (nrow(d) == 0 || nlevels(d$TIME) < 2) { cat("  (sin datos o menos de 2 tiempos)\n"); next }
     lev <- tryCatch(leveneTest(v ~ interaction(site, TIME), data = d)$`Pr(>F)`[1], error = function(e) NA)
     cat("  Levene p =", signif(lev, 3), "\n")
     mod <- tryCatch(aov(v ~ site * TIME, data = d), error = function(e) NULL)
@@ -189,7 +266,7 @@ for (v in nombres_var) stats_var(v)
 #  4. MOSTRAR EN PANTALLA Y GUARDAR
 # -----------------------------------------------------------------------------------------------------
 graphics.off()
-for (p in list(p_DIC_largo, p_DIC_delta, p_d13_largo, p_d13_delta)) {
+for (p in list(p_DIC_largo, p_DIC_delta, p_d13_largo, p_d13_delta, p_DICm_largo, p_DICm_delta)) {
   print(p)
   Sys.sleep(0.2)
 }
@@ -197,8 +274,10 @@ for (p in list(p_DIC_largo, p_DIC_delta, p_d13_largo, p_d13_delta)) {
 dir.create(carpeta_out, showWarnings = FALSE, recursive = TRUE)
 ggsave(file.path(carpeta_out, paste0("DIC13_fig1_DIC_largo_", trt_plot, ".png")),    p_DIC_largo, width = 8.5, height = 4.5, dpi = 300)
 ggsave(file.path(carpeta_out, paste0("DIC13_fig2_DIC_delta_", trt_plot, ".png")),    p_DIC_delta, width = 8.5, height = 4.5, dpi = 300)
-ggsave(file.path(carpeta_out, paste0("DIC13_fig3_d13C_largo_", trt_plot, ".png")),   p_d13_largo, width = 8.5, height = 4.5, dpi = 300)
-ggsave(file.path(carpeta_out, paste0("DIC13_fig4_d13C_delta_", trt_plot, ".png")),   p_d13_delta, width = 8.5, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig3_d13C_largo_", trt_plot, ".png")),   p_d13_largo, width = 11, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig4_d13C_delta_", trt_plot, ".png")),   p_d13_delta, width = 11, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig5_DICmasa_largo_", trt_plot, ".png")), p_DICm_largo, width = 11, height = 4.5, dpi = 300)
+ggsave(file.path(carpeta_out, paste0("DIC13_fig6_DICmasa_delta_", trt_plot, ".png")), p_DICm_delta, width = 11, height = 4.5, dpi = 300)
 
 write_csv(datos,       file.path(carpeta_out, "DIC13_datos_por_frasco_y_capa.csv"))
 write_csv(datos_delta, file.path(carpeta_out, "DIC13_delta_por_frasco_y_capa.csv"))
