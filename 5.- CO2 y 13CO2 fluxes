@@ -1,6 +1,17 @@
 # =====================================================================================================
 #  CO2 RATE (headspace) + CO2 y 13CO2
+# Convierte el CO₂ del headspace en un flujo por superficie de sedimento y mira cómo cambia en el tiempo, en Dry y Wet, para el sitio de MO baja y el de MO alta.
+
+# Calcula los µmol de C del CO₂ de cada botella con la ley de los gases, usando su propio volumen de headspace.
+# Calcula los µmol de ¹³C de cada botella a partir del δ¹³C.
+# Hace el delta final − initial de 24 h por grupo, con la SD combinada.
+# Pasa ese delta a flujo por área y por hora.
+# El paso a unidad areal 
 #
+# µmol por botella = ppm × P × V / (R × T). Es la ley de los gases: los ppm son una fracción del aire del headspace, y el aire tiene P·V/(R·T) moles.
+# Flujo = delta / (24 h × área). El área es la del círculo de la botella: radio 2,5 cm = 19,6 cm² = 0,00196 m².
+#
+#La regla práctica es que 1 µmol de CO₂ por botella y día equivale a ≈ 21 µmol C m⁻² h⁻¹ (porque 1 / (24 × 0,00196) ≈ 21).
 #  Qué hace:
 #   Fig 1  Flujo total de CO2 (µmol C m-2 h-1)
 #   Fig 2  Flujo de 13C (µmol 13C m-2 h-1)
