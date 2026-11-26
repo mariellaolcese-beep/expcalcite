@@ -2,30 +2,11 @@
 #  DIC Y d13C-DIC (13DIC) EN EL AGUA: EVOLUCION A LARGO PLAZO Y CAMBIO EN 24 h   (OL y PW; por defecto solo Wet)
 # ======================================================================================================================
 #
-#  DE QUE SE TRATA
-#  Mira como cambian, a lo largo del experimento (t0 a t4) y dentro de cada incubacion de 24 h, dos cosas del agua:
-#    - DIC (mM): carbono inorganico disuelto = CO2 disuelto + bicarbonato + carbonato. Sube con la respiracion y con la
-#      disolucion de calcita; baja si se desgasifica CO2 o precipita calcita.
-#    - d13C-DIC (permil vs VPDB): composicion isotopica de ese carbono. Como el reactivo de calcita esta marcado con 13C
-#      (muy pesado), un d13C-DIC que SUBE indica que entra carbono marcado (calcita marcada disuelta); uno que BAJA indica
-#      que entra carbono "ligero" (respiracion, Viladrau, CO2 del aire).
-#  Compartimentos: OL = agua suprayacente; PW = agua de poro; TOTAL = OL + PW. Sitio A = MO baja (negro); Sitio B = MO alta (rosa).
-#
-#  SOBRE EL "TOTAL" (OL + PW)
-#    - El DIC en mM es una CONCENTRACION y no se puede sumar entre compartimentos. Por eso el Total se calcula con la MASA por
-#      botella: DIC (mmol) = DIC_OL_bottle_mmol + DIC_PW_bottle_mmol (Figs. 5 y 6).
-#    - El d13C-DIC del Total es la media PONDERADA por masa: d13C = ((F/(1-F))/R_VPDB - 1) x 1000, con
-#      F = (13C_OL + 13C_PW) / (C_OL + C_PW) a partir de 13DIC_*_bottle_umol y DIC_*_bottle_mmol. R_VPDB = 0,0111802 (estandar).
-#    - El Total solo se calcula si la botella tiene OL y PW medidos (un 0 en la masa se trata como "no medido").
-#    - Al empezar, el script imprime un chequeo: el d13C calculado con las masas debe parecerse al d13C medido. Si la diferencia
-#      es grande, hay un problema de unidades en las columnas de masa.
-#
-#  LOGICA
-#    - LARGO PLAZO (Fig. 1 y 3): solo frascos INITIAL (estado del sistema al empezar la ventana de 24 h de cada tiempo).
-#      Cada punto es una botella distinta (se destruye al muestrear). Rombo = promedio.
-#    - DELTA 24 h (Fig. 2 y 4): cada frasco FINAL menos el promedio de los INITIAL del mismo tiempo, sitio, tratamiento y capa.
-#      Es lo que paso dentro del cierre de 24 h. Si los puntos quedan a ambos lados del 0, el signo no es consistente.
-#
+# # Mira como cambian, a lo largo del experimento y dentro de cada incubacion de 24 h, dos cosas el  DIC (mM)y el d13C-DIC (permil): composicion isotopica de ese carbono. Como el reactivo de calcita esta marcado con 13C (muy pesado), un d13C-DIC que SUBE indica que entra carbono marcado (calcita marcada disuelta)​.​
+
+# El producto de este script son: 5 tablas, la primera muestra el estado de los datos, y las otras tres hacen estadistica para ver la normalidad y homocedasticidad de los datos. Luego muestran si hay diferencias entre sitio, tiempo y su interacción y que tiempos se diferencias entre si (ANOVA y Tuckey).​
+
+# Y por último, este script genera 4 gráficos. La primera figura muestra la evolución temporal del DIC considerando solo las botellas iniciales, la segunda hace lo mismo pero con el delta de las 24h de incubacion cerradas. Luego entrega dos figuras mas haciendo lo mismo, pero con el 13C-DIC.​
 #  QUE NECESITA
 #  planilla_total.csv con: sample_id, extraction_time, stage, treatment, site, DIC_OL_mM, DIC_PW_mM, 13DIC_OL_d y 13DIC_PW_d
 #  (las dos ultimas con la letra delta; si Excel la guardo como "?", el script la cambia), y para el Total:
@@ -52,7 +33,7 @@
 #  LIMITES A TENER EN CUENTA
 #    - DIC esta en CONCENTRACION (mM), no en masa por botella: la evaporacion lo concentra y los rellenos de Viladrau lo diluyen.
 #    - El d13C-DIC no es una cantidad de calcita disuelta: depende tambien de cuanto DIC haya. Para la masa disuelta usa los
-#      scripts de disolucion (Disolucion_tutor_compartimentos.R).
+#      scripts de disolucion (Disolucion_compartimentos.R).
 #    - Si la interaccion sitio x tiempo es significativa, el Tukey promediado entre sitios puede engañar (aviso de R):
 #      comparar los tiempos dentro de cada sitio.
 #    - n = 4 botellas por grupo: un solo dato raro mueve el promedio de forma visible.
